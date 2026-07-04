@@ -235,6 +235,23 @@ Minimal fix:
 
 Remove `@_exported import NukeUI` from `Audiobookshelf.swift`, keep `import Nuke`, and add explicit `import NukeUI` only to UI files that use `LazyImage`. Then change `API/Package.swift` to depend on the `Nuke` product instead of `NukeUI` if `API` only needs the image pipeline types.
 
+### `Models` depends on remote API DTOs
+
+Evidence:
+
+- `Models/Package.swift:17-27` declares a package dependency on `API`.
+- SwiftData model files such as `Models/Sources/Models/LocalBook.swift:1`, `LocalPodcast.swift:1`, `LocalEpisode.swift:1`, `Bookmark.swift:1`, `Track.swift:1`, and `Chapter.swift:1` import `API`.
+- `Models/Sources/Models/LocalBook.swift:34-43` exposes `Book.MediaType` from the API layer as a local model property.
+- `Models/Sources/Models/LocalBook.swift:210-244` converts a remote `Book` DTO inside the persistent SwiftData model.
+
+Impact:
+
+The local persistence package is not an independent local/domain layer. Remote DTO changes can force changes in SwiftData models, widgets, App Intents, and playback code. This also compounds the `NukeUI` re-export problem: anything importing `Models` reaches through to `API`, which currently reaches into UI image-loading dependencies.
+
+Minimal fix:
+
+Do not start with a broad rewrite. First move API-to-local mapping into app/API adapter files near the download/offline flows, then replace local model properties that expose API types with local equivalents. Once those imports are gone, remove the `Models -> API` package dependency.
+
 ## Suggested Fix Order
 
 1. Add a CI baseline with `swift-format lint` and a generic iOS `xcodebuild build`.
@@ -245,6 +262,7 @@ Remove `@_exported import NukeUI` from `Audiobookshelf.swift`, keep `import Nuke
 6. Tighten credential sharing and HTTP credential warnings.
 7. Cancel duplicate view-model tasks and observation streams before replacement.
 8. Stop re-exporting `NukeUI` from `API` and import it explicitly from UI files.
+9. Break the `Models -> API` dependency by moving DTO-to-local mapping into adapter files.
 
 ## Notes
 
