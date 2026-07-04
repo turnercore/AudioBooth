@@ -198,6 +198,22 @@ Minimal fix:
 
 Prefer Authorization headers where the consumer supports them. Where a URL-only consumer forces query auth, mint short-lived URLs or scope tokens narrowly.
 
+### `API` re-exports `NukeUI` into every API consumer
+
+Evidence:
+
+- `API/Sources/API/Audiobookshelf.swift:3` uses `@_exported import NukeUI`.
+- `API/Package.swift:26` depends on `.product(name: "NukeUI", package: "Nuke")`.
+- The `API` module itself configures `ImagePipeline`, `DataLoader`, and `DataCache`, which come from `Nuke`, while UI files that render `LazyImage` can import `NukeUI` directly.
+
+Impact:
+
+`API` is otherwise the Audiobookshelf client layer: auth, network requests, DTOs, sessions, libraries, and discovery. Re-exporting `NukeUI` means every module that imports `API` also inherits SwiftUI image-loading symbols and a UI dependency edge it may not use. That hides real dependencies in app/watch views and makes non-UI consumers pay for a convenience import.
+
+Minimal fix:
+
+Remove `@_exported import NukeUI` from `Audiobookshelf.swift`, keep `import Nuke`, and add explicit `import NukeUI` only to UI files that use `LazyImage`. Then change `API/Package.swift` to depend on the `Nuke` product instead of `NukeUI` if `API` only needs the image pipeline types.
+
 ## Suggested Fix Order
 
 1. Remove raw OIDC/cookie/response-body auth logging.
@@ -206,6 +222,7 @@ Prefer Authorization headers where the consumer supports them. Where a URL-only 
 4. Make download finalization atomic and size-checked.
 5. Tighten credential sharing and HTTP credential warnings.
 6. Cancel duplicate view-model tasks and observation streams before replacement.
+7. Stop re-exporting `NukeUI` from `API` and import it explicitly from UI files.
 
 ## Notes
 
