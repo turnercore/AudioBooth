@@ -1,4 +1,3 @@
-import API
 @preconcurrency import Foundation
 import SwiftData
 
@@ -31,8 +30,19 @@ public final class LocalBook {
     authors.map(\.name).joined(separator: ", ")
   }
 
-  public var mediaType: Book.MediaType {
-    var types: Book.MediaType = []
+  public struct MediaKind: OptionSet, Sendable {
+    public let rawValue: Int
+
+    public static let audiobook = MediaKind(rawValue: 1 << 0)
+    public static let ebook = MediaKind(rawValue: 1 << 1)
+
+    public init(rawValue: Int) {
+      self.rawValue = rawValue
+    }
+  }
+
+  public var mediaType: MediaKind {
+    var types: MediaKind = []
     if !tracks.isEmpty {
       types.insert(.audiobook)
     }
@@ -207,41 +217,6 @@ extension LocalBook {
     return tracks.allSatisfy { track in track.relativePath != nil }
   }
 
-  public convenience init(from book: Book) {
-    let authors =
-      book.media.metadata.authors?.map { apiAuthor in
-        Author(id: apiAuthor.id, name: apiAuthor.name)
-      } ?? []
-
-    let series =
-      book.media.metadata.series?.map { apiSeries in
-        Series(id: apiSeries.id, name: apiSeries.name, sequence: apiSeries.sequence)
-      } ?? []
-
-    let narrators = book.media.metadata.narrators ?? []
-
-    self.init(
-      bookID: book.id,
-      libraryID: book.libraryID,
-      title: book.title,
-      authors: authors,
-      narrators: narrators,
-      series: series,
-      coverURL: book.coverURL(),
-      duration: book.duration,
-      tracks: book.tracks?.map(Track.init) ?? [],
-      chapters: book.chapters?.map(Chapter.init) ?? [],
-      publishedYear: book.publishedYear,
-      subtitle: book.media.metadata.subtitle,
-      bookDescription: book.description,
-      genres: book.genres,
-      tags: book.tags,
-      isExplicit: book.media.metadata.explicit ?? false,
-      isAbridged: book.media.metadata.abridged ?? false,
-      publisher: book.publisher,
-      language: book.media.metadata.language
-    )
-  }
 }
 
 extension LocalBook: PlayableItem {

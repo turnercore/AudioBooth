@@ -7,7 +7,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 ## Ownership
 
 - Own files under `API/`.
-- Public types here are consumed by the app, models, widgets, watch app, and intents through package dependencies.
+- Public types here are consumed by the app, widgets, watch app, and intents through package dependencies.
 - Keep this package usable by iOS and watchOS targets declared in `API/Package.swift`.
 
 ## Local Contracts
@@ -16,7 +16,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - Do not log raw credentials, auth callback query values, cookie headers, or auth response bodies.
 - Keep network request construction centralized in `NetworkService` unless a platform API requires a different transport.
 - Avoid adding UI dependencies to `API`; UI files that use `LazyImage` should import `NukeUI` explicitly.
-- Preserve the current `Models -> API` dependency only until DTO-to-local mapping is moved out of `Models`; do not add new model-layer API coupling.
+- Keep DTO-to-local model mapping in app-side adapter code; do not reintroduce a `Models -> API` dependency.
 
 ## Work Guidance
 

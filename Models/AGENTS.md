@@ -15,7 +15,7 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 - Treat SwiftData persistence changes as data-loss sensitive.
 - Do not delete or recreate persistent stores without preserving recoverable data first.
 - Save/delete helpers that declare `throws` should surface `context.save()` failures instead of swallowing them.
-- Avoid adding new `API` imports or remote DTO mapping here. Existing `Models -> API` coupling is audit debt; move new mapping into app/API adapter code.
+- Do not import `API` or add remote DTO mapping here; keep DTO-to-local mapping in app-side adapter code.
 - Keep model properties local-domain focused; avoid exposing remote API enum types from local SwiftData models.
 
 ## Work Guidance
@@ -31,4 +31,3 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 - `swift test` in this package is not currently a reliable standalone check.
 
 ## Child DOX Index
-

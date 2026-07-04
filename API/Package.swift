@@ -23,7 +23,7 @@ let package = Package(
       dependencies: [
         .product(name: "Logging", package: "swift-log"),
         .product(name: "SimpleKeychain", package: "SimpleKeychain"),
-        .product(name: "NukeUI", package: "Nuke"),
+        .product(name: "Nuke", package: "Nuke"),
         .product(name: "Pulse", package: "Pulse"),
       ],
     )

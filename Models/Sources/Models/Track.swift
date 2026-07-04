@@ -1,4 +1,3 @@
-import API
 import Foundation
 import SwiftData
 
@@ -22,27 +21,6 @@ public final class Track {
   public var mimeType: String?
 
   public var relativePath: URL?
-
-  public init(from track: AudioTrack) {
-    self.index = track.index
-    self.startOffset = track.startOffset
-    self.duration = track.duration
-    self.title = track.title
-    self.updatedAt = track.updatedAt
-
-    self.filename = track.metadata?.filename
-    self.ext = track.metadata?.ext
-    self.size = track.metadata?.size
-
-    self.format = track.format
-    self.bitRate = track.bitRate
-    self.codec = track.codec
-    self.channels = track.channels
-    self.channelLayout = track.channelLayout
-    self.mimeType = track.mimeType
-
-    self.relativePath = nil
-  }
 
   public init(
     index: Int,

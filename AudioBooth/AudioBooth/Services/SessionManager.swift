@@ -85,14 +85,13 @@ extension SessionManager {
     }
 
     do {
-      let result = try await startSession(
+      return try await startSession(
         itemID: itemID,
         episodeID: episodeID,
         item: item,
         mediaProgress: mediaProgress,
         forceTranscode: forceTranscode
       )
-      return result.updatedItem
     } catch {
       AppLogger.session.warning("Failed to create remote session: \(error)")
       throw error
@@ -105,7 +104,7 @@ extension SessionManager {
     item: (any PlayableItem)?,
     mediaProgress: MediaProgress,
     forceTranscode: Bool
-  ) async throws -> (session: Session, updatedItem: any PlayableItem) {
+  ) async throws -> any PlayableItem {
     AppLogger.session.info("Fetching session from server...")
 
     let audiobookshelfSession = try await audiobookshelf.sessions.start(
@@ -115,7 +114,10 @@ extension SessionManager {
       timeout: item == nil ? 30 : 10
     )
 
-    guard let session = Session(from: audiobookshelfSession) else {
+    guard
+      let serverURL = audiobookshelf.authentication.serverURL,
+      let sessionURL = Self.sessionURL(for: audiobookshelfSession.id, serverURL: serverURL)
+    else {
       throw SessionError.failedToCreateSession
     }
 
@@ -180,13 +182,13 @@ extension SessionManager {
     }
 
     let playbackSession = PlaybackSession(
-      id: session.id,
+      id: audiobookshelfSession.id,
       libraryItemID: itemID,
       episodeID: episodeID,
       startTime: mediaProgress.currentTime,
       currentTime: mediaProgress.currentTime,
       duration: updatedItem.duration,
-      baseURL: session.url,
+      baseURL: sessionURL,
       displayTitle: updatedItem.title,
       displayAuthor: updatedItem.details
     )
@@ -199,7 +201,12 @@ extension SessionManager {
     scheduleSessionClose()
 
     AppLogger.session.info("Session setup completed successfully")
-    return (session, updatedItem)
+    return updatedItem
+  }
+
+  private static func sessionURL(for sessionID: String, serverURL: URL) -> URL? {
+    let baseURL = serverURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    return URL(string: "\(baseURL)/public/session/\(sessionID)")
   }
 
   private func startLocalSession(

@@ -311,6 +311,7 @@
 			packageProductDependencies = (
 				3F2D3C122EBE730D00D49AFF /* Models */,
 				3F2D3C1F2EBFC9D700D49AFF /* PlayerIntents */,
+				3F8C4A022F78A00100B4D111 /* Nuke */,
 			);
 			productName = AudioBoothWidgetExtension;
 			productReference = 3F2D3BF32EBE711800D49AFF /* AudioBoothWidgetExtension.appex */;
@@ -356,10 +357,12 @@
 				3FBEA0662E8CD49300976BA0 /* AudioBooth Watch App */,
 			);
 			name = "AudioBooth Watch App";
-			packageProductDependencies = (
-				3FBEA0822E8CE7D600976BA0 /* API */,
-				3F50E5E52E8DD97C0087A5B6 /* Models */,
-			);
+				packageProductDependencies = (
+					3FBEA0822E8CE7D600976BA0 /* API */,
+					3F50E5E52E8DD97C0087A5B6 /* Models */,
+					3F8C4A022F78A00100B4D111 /* Nuke */,
+					3F8C4A032F78A00100B4D111 /* NukeUI */,
+				);
 			productName = "AudioBooth Watch App";
 			productReference = 3FBEA0652E8CD49300976BA0 /* AudioBooth Watch App.app */;
 			productType = "com.apple.product-type.application";
@@ -399,9 +402,11 @@
 				3F2F21D72EE692A400A298C6 /* ReadiumAdapterGCDWebServer */,
 				3F2F21D92EE692A400A298C6 /* ReadiumStreamer */,
 				3FEB781B2F059A3B00618BF9 /* Recording */,
-				3FEB781D2F059A3B00618BF9 /* Reporting */,
-				3FEB78212F059BEC00618BF9 /* Installations */,
-			);
+					3FEB781D2F059A3B00618BF9 /* Reporting */,
+					3FEB78212F059BEC00618BF9 /* Installations */,
+					3F8C4A022F78A00100B4D111 /* Nuke */,
+					3F8C4A032F78A00100B4D111 /* NukeUI */,
+				);
 			productName = AudiobookshelfDemo;
 			productReference = 3FC8DC6E2E638F5E00A4B080 /* AudioBooth.app */;
 			productType = "com.apple.product-type.application";
@@ -451,6 +456,7 @@
 				3F5C74582EDE5B2400976431 /* XCRemoteSwiftPackageReference "PulseLogHandler" */,
 				3F2F21CF2EE68DFB00A298C6 /* XCRemoteSwiftPackageReference "swift-toolkit" */,
 				3FEB781A2F059A3B00618BF9 /* XCRemoteSwiftPackageReference "KSCrash" */,
+				3F8C4A012F78A00100B4D111 /* XCRemoteSwiftPackageReference "Nuke" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3FC8DC6F2E638F5E00A4B080 /* Products */;
@@ -1066,6 +1072,14 @@
 				version = 5.2.2;
 			};
 		};
+		3F8C4A012F78A00100B4D111 /* XCRemoteSwiftPackageReference "Nuke" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kean/Nuke.git";
+			requirement = {
+				kind = exactVersion;
+				version = 13.0.6;
+			};
+		};
 		3FEB781A2F059A3B00618BF9 /* XCRemoteSwiftPackageReference "KSCrash" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/kstenerud/KSCrash";
@@ -1145,6 +1159,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 3F7928D72EDE439F008D6027 /* XCRemoteSwiftPackageReference "Pulse" */;
 			productName = PulseProxy;
+		};
+		3F8C4A022F78A00100B4D111 /* Nuke */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3F8C4A012F78A00100B4D111 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = Nuke;
+		};
+		3F8C4A032F78A00100B4D111 /* NukeUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3F8C4A012F78A00100B4D111 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = NukeUI;
 		};
 		3FBEA0822E8CE7D600976BA0 /* API */ = {
 			isa = XCSwiftPackageProductDependency;
