@@ -70,8 +70,6 @@ struct SettingsView: View {
           Text("Preferences")
         }
 
-        TipJarView(model: model.tipJar)
-
         Section {
           externalLink(
             url: "https://github.com/AudioBooth/AudioBooth/issues",
@@ -212,18 +210,15 @@ struct SettingsView: View {
 extension SettingsView {
   @Observable class Model: ObservableObject {
     var navigationPath = NavigationPath()
-    var tipJar: TipJarView.Model
     var playbackSessionList: PlaybackSessionListView.Model?
     var storagePreferences: StoragePreferencesView.Model?
 
     var appVersion: String = "Version \(UIApplication.appVersion)"
 
     init(
-      tipJar: TipJarView.Model = .mock,
       playbackSessionList: PlaybackSessionListView.Model? = nil,
       storagePreferences: StoragePreferencesView.Model? = nil
     ) {
-      self.tipJar = tipJar
       self.playbackSessionList = playbackSessionList
       self.storagePreferences = storagePreferences
     }

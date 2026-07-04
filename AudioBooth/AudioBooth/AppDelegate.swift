@@ -3,7 +3,6 @@ import AppIntents
 import Logging
 import Models
 import PlayerIntents
-import RevenueCat
 import UIKit
 import UserNotifications
 
@@ -60,9 +59,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     _ = UserPreferences.shared
 
     UNUserNotificationCenter.current().delegate = self
-
-    Purchases.logLevel = .error
-    Purchases.configure(withAPIKey: "appl_AuBdFKRrOngbJsXGkkxDKGNbGRW")
 
     let player: PlayerManagerProtocol = PlayerManager.shared
     AppDependencyManager.shared.add(dependency: player)
