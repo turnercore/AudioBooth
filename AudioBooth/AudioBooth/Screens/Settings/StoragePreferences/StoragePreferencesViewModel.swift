@@ -102,7 +102,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
     let total = await storageManager.getTotalStorageUsed()
     let downloads = await storageManager.getDownloadedContentSize()
     let cache = await storageManager.getImageCacheSize()
-    let breakdown = await computeContentBreakdown()
+    let breakdown = await Self.computeContentBreakdown()
 
     totalSize = total.formattedByteSize
     downloadSize = downloads.formattedByteSize
@@ -120,7 +120,15 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
     isLoading = false
   }
 
-  private func computeContentBreakdown() async -> (
+  private static func computeContentBreakdown() async -> (
+    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int
+  ) {
+    await Task.detached(priority: .utility) {
+      computeContentBreakdownOnDisk()
+    }.value
+  }
+
+  nonisolated private static func computeContentBreakdownOnDisk() -> (
     audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int
   ) {
     guard
@@ -149,7 +157,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
 
       if let books = try? FileManager.default.contentsOfDirectory(at: audiobooksDir, includingPropertiesForKeys: nil) {
         for book in books {
-          let size = directorySize(at: book)
+          let size = directorySizeOnDisk(at: book)
           if size > 0 {
             audiobooksBytes += size
             audiobooksCount += 1
@@ -159,7 +167,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
 
       if let books = try? FileManager.default.contentsOfDirectory(at: ebooksDir, includingPropertiesForKeys: nil) {
         for book in books {
-          let size = directorySize(at: book)
+          let size = directorySizeOnDisk(at: book)
           if size > 0 {
             ebooksBytes += size
             ebooksCount += 1
@@ -243,7 +251,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
     return directorySize(at: audiobookDir) + directorySize(at: ebookDir)
   }
 
-  private func directorySize(at url: URL) -> Int64 {
+  nonisolated private static func directorySizeOnDisk(at url: URL) -> Int64 {
     guard
       let enumerator = FileManager.default.enumerator(
         at: url,
@@ -258,5 +266,9 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
       size += Int64(values?.fileSize ?? 0)
     }
     return size
+  }
+
+  private func directorySize(at url: URL) -> Int64 {
+    Self.directorySizeOnDisk(at: url)
   }
 }

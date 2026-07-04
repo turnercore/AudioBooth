@@ -35,7 +35,6 @@ Simulator builds should work at this point.
 For device builds on a free account, you'll need to temporarily remove some capabilities that free accounts can't provision. In Xcode, go to each target's Signing & Capabilities tab and remove:
 
 **AudioBooth target:**
-- In-App Purchase
 - NFC Tag Reading
 - iCloud (Key-value storage)
 
@@ -48,6 +47,16 @@ All Swift code should pass `swift-format`. Run:
 
 ```bash
 xcrun swift-format format --in-place --recursive --parallel .
+xcrun swift-format lint --strict --recursive --parallel .
+```
+
+## Validation
+
+Run the same baseline as CI before landing changes:
+
+```bash
+swift test --package-path Models
+xcodebuild -project AudioBooth/AudioBooth.xcodeproj -scheme AudioBooth -destination 'generic/platform=iOS' -configuration Debug build CODE_SIGNING_ALLOWED=NO
 ```
 
 ## Branch Naming

@@ -90,13 +90,13 @@ extension Bookmark {
       context.insert(self)
     }
 
-    try? context.save()
+    try context.save()
   }
 
   public func delete() throws {
     let context = ModelContextProvider.shared.context
     context.delete(self)
-    try? context.save()
+    try context.save()
   }
 
   public static func syncFromAPI(userData: User) throws {
@@ -114,6 +114,6 @@ extension Bookmark {
       }
     }
 
-    try? context.save()
+    try context.save()
   }
 }

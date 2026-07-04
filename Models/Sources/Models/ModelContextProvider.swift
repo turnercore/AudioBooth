@@ -60,6 +60,15 @@ public final class ModelContextProvider {
     activeServerID = serverID
   }
 
+  public func useInMemoryContainer(for serverID: String) throws {
+    let schema = Schema(versionedSchema: AudiobookshelfSchema.self)
+    let configuration = ModelConfiguration(isStoredInMemoryOnly: true, allowsSave: true)
+    let container = try ModelContainer(for: schema, configurations: configuration)
+    containers[serverID] = container
+    contexts[serverID] = container.mainContext
+    activeServerID = serverID
+  }
+
   private func createContainer(for serverID: String) throws -> ModelContainer {
     let dbURL = databaseURL(for: serverID)
     let configuration = ModelConfiguration(url: dbURL, allowsSave: true)
@@ -75,15 +84,29 @@ public final class ModelContextProvider {
       AppLogger.persistence.error(
         "Failed to create persistent model container for server \(serverID): \(error)"
       )
-      AppLogger.persistence.info("Clearing data and creating fresh container...")
+      AppLogger.persistence.info("Backing up data and creating fresh container...")
 
+      let backupID = ISO8601DateFormatter()
+        .string(from: Date())
+        .replacingOccurrences(of: ":", with: "-")
       let fileExtensions = ["", "-shm", "-wal"]
+      var backedUpFiles = 0
       for ext in fileExtensions {
         let fileURL = URL(fileURLWithPath: dbURL.path + ext)
-        try? FileManager.default.removeItem(at: fileURL)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { continue }
+        let backupURL = URL(fileURLWithPath: "\(dbURL.path).backup-\(backupID)\(ext)")
+        do {
+          try FileManager.default.moveItem(at: fileURL, to: backupURL)
+          backedUpFiles += 1
+        } catch {
+          AppLogger.persistence.error(
+            "Failed to back up database file \(fileURL.lastPathComponent): \(error.localizedDescription)"
+          )
+          throw error
+        }
       }
 
-      AppLogger.persistence.info("Cleared existing database files")
+      AppLogger.persistence.info("Backed up \(backedUpFiles) existing database file(s)")
 
       do {
         let schema = Schema(versionedSchema: AudiobookshelfSchema.self)

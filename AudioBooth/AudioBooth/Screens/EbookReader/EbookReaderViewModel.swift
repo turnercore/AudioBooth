@@ -13,7 +13,7 @@ import WebKit
 final class EbookReaderViewModel: EbookReaderView.Model {
   enum Source {
     case local(URL)
-    case remote(URL)
+    case remote(URL, headers: [String: String])
   }
 
   private let source: Source
@@ -101,11 +101,11 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       case .local(let url):
         localURL = url
 
-      case .remote(let remoteURL):
+      case .remote(let remoteURL, let headers):
         if let bookID {
           localURL = try await downloadEbook(bookID: bookID)
         } else {
-          localURL = try await downloadTemporaryFile(from: remoteURL)
+          localURL = try await downloadTemporaryFile(from: remoteURL, headers: headers)
           temporaryFileURL = localURL
         }
       }
@@ -499,8 +499,13 @@ extension EbookReaderViewModel {
     throw EbookError.downloadFailed
   }
 
-  private func downloadTemporaryFile(from url: URL) async throws -> URL {
-    let (tempURL, _) = try await URLSession.shared.download(from: url)
+  private func downloadTemporaryFile(from url: URL, headers: [String: String]) async throws -> URL {
+    var request = URLRequest(url: url)
+    for (key, value) in headers {
+      request.setValue(value, forHTTPHeaderField: key)
+    }
+
+    let (tempURL, _) = try await URLSession.shared.download(for: request)
 
     let tempDirectory = FileManager.default.temporaryDirectory
     let fileName = url.lastPathComponent

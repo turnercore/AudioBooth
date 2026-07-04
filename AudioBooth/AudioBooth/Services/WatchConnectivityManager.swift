@@ -150,7 +150,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     guard let session, session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else {
       return
     }
-    context["customHeaders"] = Audiobookshelf.shared.authentication.server?.customHeaders ?? [:]
+    context["customHeaders"] = watchRequestHeaders()
     context["skipForwardInterval"] = UserPreferences.shared.skipForwardInterval
     context["skipBackwardInterval"] = UserPreferences.shared.skipBackwardInterval
     do {
@@ -380,10 +380,9 @@ extension WatchConnectivityManager: WCSessionDelegate {
   ) async {
     do {
       guard
-        let serverURL = Audiobookshelf.shared.authentication.serverURL,
-        let token = Audiobookshelf.shared.authentication.server?.token
+        let serverURL = Audiobookshelf.shared.authentication.serverURL
       else {
-        replyHandler(["error": "No server URL or token"])
+        replyHandler(["error": "No server URL"])
         return
       }
 
@@ -413,15 +412,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
       let tracks: [[String: Any]] = audioTracks.map { audioTrack in
         let trackURL: String
         if forDownload, let ino = audioTrack.ino {
-          var url = serverURL.appendingPathComponent("api/items/\(bookID)/file/\(ino)/download")
-          switch token {
-          case .legacy(let tokenValue):
-            url.append(queryItems: [URLQueryItem(name: "token", value: tokenValue)])
-          case .bearer(let accessToken, _, _):
-            url.append(queryItems: [URLQueryItem(name: "token", value: accessToken)])
-          case .apiKey(let key):
-            url.append(queryItems: [URLQueryItem(name: "token", value: key)])
-          }
+          let url = serverURL.appendingPathComponent("api/items/\(bookID)/file/\(ino)/download")
           trackURL = url.absoluteString
         } else if let sessionID = sessionID {
           let baseURLString = serverURL.absoluteString.trimmingCharacters(
@@ -636,5 +627,14 @@ extension WatchConnectivityManager: WCSessionDelegate {
         )
       }
     }
+  }
+}
+
+private extension WatchConnectivityManager {
+  func watchRequestHeaders() -> [String: String] {
+    guard let server = Audiobookshelf.shared.authentication.server else { return [:] }
+    var headers = server.customHeaders
+    headers["Authorization"] = server.token.bearer
+    return headers
   }
 }

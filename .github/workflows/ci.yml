@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - personal-main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Swift format lint
+        run: xcrun swift-format lint --strict --recursive --parallel .
+
+      - name: Package tests
+        run: swift test --package-path Models
+
+      - name: Build AudioBooth
+        run: >
+          xcodebuild
+          -project AudioBooth/AudioBooth.xcodeproj
+          -scheme AudioBooth
+          -destination 'generic/platform=iOS'
+          -configuration Debug
+          build
+          CODE_SIGNING_ALLOWED=NO

@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import UIKit
 
 public final class SessionService {
   private let audiobookshelf: Audiobookshelf

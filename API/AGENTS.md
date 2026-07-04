@@ -15,7 +15,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - Treat auth tokens, cookies, custom headers, OIDC values, and server URLs as sensitive.
 - Do not log raw credentials, auth callback query values, cookie headers, or auth response bodies.
 - Keep network request construction centralized in `NetworkService` unless a platform API requires a different transport.
-- Avoid adding UI dependencies to `API`; `NukeUI` re-export is known debt and should not be expanded.
+- Avoid adding UI dependencies to `API`; UI files that use `LazyImage` should import `NukeUI` explicitly.
 - Preserve the current `Models -> API` dependency only until DTO-to-local mapping is moved out of `Models`; do not add new model-layer API coupling.
 
 ## Work Guidance
@@ -31,4 +31,3 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - `swift test` in this package is not currently a reliable standalone check.
 
 ## Child DOX Index
-

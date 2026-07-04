@@ -177,7 +177,7 @@ final class PlayerManager: ObservableObject, Sendable {
 
   func openRemoteBookAsEbook(_ book: Book) {
     if let ebookURL = book.ebookURL {
-      reader = EbookReaderViewModel(source: .remote(ebookURL), bookID: book.id)
+      reader = EbookReaderViewModel(source: .remote(ebookURL, headers: [:]), bookID: book.id)
     } else {
       Toast(error: "Ebook not available").show()
     }

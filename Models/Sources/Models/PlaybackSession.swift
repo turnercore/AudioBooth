@@ -113,7 +113,7 @@ extension PlaybackSession {
     } else {
       context.insert(self)
     }
-    try? context.save()
+    try context.save()
   }
 
 }

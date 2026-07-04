@@ -94,7 +94,7 @@ extension LocalPodcast {
       context.insert(self)
     }
 
-    try? context.save()
+    try context.save()
   }
 
 }

@@ -534,7 +534,7 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     if let ebookURL = localBook?.ebookLocalPath {
       ebookReader = EbookReaderViewModel(source: .local(ebookURL), bookID: bookID)
     } else if let book, let ebookURL = book.ebookURL {
-      ebookReader = EbookReaderViewModel(source: .remote(ebookURL), bookID: bookID)
+      ebookReader = EbookReaderViewModel(source: .remote(ebookURL, headers: [:]), bookID: bookID)
     } else {
       Toast(error: "Ebook URL not available").show()
     }

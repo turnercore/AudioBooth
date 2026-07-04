@@ -15,7 +15,8 @@ final class AuthenticationViewModel: AuthenticationView.Model {
 
   override func onLoginTapped() {
     guard !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      canSubmitCredentials
     else {
       return
     }
@@ -45,7 +46,7 @@ final class AuthenticationViewModel: AuthenticationView.Model {
 
   override func onAPIKeyLoginTapped() {
     let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmedKey.isEmpty else { return }
+    guard !trimmedKey.isEmpty, canSubmitCredentials else { return }
 
     isLoading = true
 
@@ -70,6 +71,8 @@ final class AuthenticationViewModel: AuthenticationView.Model {
   }
 
   override func onOIDCLoginTapped(using session: WebAuthenticationSession) {
+    guard canSubmitCredentials else { return }
+
     isLoading = true
 
     let authManager = OIDCAuthenticationManager(

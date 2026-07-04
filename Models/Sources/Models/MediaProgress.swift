@@ -195,7 +195,7 @@ extension MediaProgress {
       context.insert(self)
     }
 
-    try? context.save()
+    try context.save()
 
     if progress > 0 {
       MediaProgress.cache[bookID] = progress
@@ -207,7 +207,7 @@ extension MediaProgress {
   public func delete() throws {
     let context = ModelContextProvider.shared.context
     context.delete(self)
-    try? context.save()
+    try context.save()
     MediaProgress.cache.removeValue(forKey: self.bookID)
   }
 
@@ -355,6 +355,6 @@ extension MediaProgress {
       }
     }
 
-    try? context.save()
+    try context.save()
   }
 }

@@ -37,6 +37,16 @@ struct AuthenticationView: View {
         }
       }
 
+      if model.requiresInsecureHTTPConfirmation {
+        Section {
+          Toggle("Allow credential login over HTTP", isOn: $model.hasConfirmedInsecureHTTP)
+
+          Text("HTTP does not encrypt credentials, tokens, or custom headers on the network.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+      }
+
       if model.authenticationMethod == .usernamePassword {
         Section("Credentials") {
           TextField("Username", text: $model.username)
@@ -69,7 +79,7 @@ struct AuthenticationView: View {
             }
           }
           .disabled(
-            model.username.isEmpty || model.password.isEmpty || model.isLoading
+            model.username.isEmpty || model.password.isEmpty || model.isLoading || !model.canSubmitCredentials
           )
         }
       } else if model.authenticationMethod == .apiKey {
@@ -96,7 +106,7 @@ struct AuthenticationView: View {
               Text(model.isLoading ? "Authenticating..." : "Authenticate")
             }
           }
-          .disabled(model.apiKey.isEmpty || model.isLoading)
+          .disabled(model.apiKey.isEmpty || model.isLoading || !model.canSubmitCredentials)
         } footer: {
           if let serverURL = model.serverURL {
             Link(
@@ -120,7 +130,7 @@ struct AuthenticationView: View {
               Text(model.isLoading ? "Authenticating..." : "Login with SSO")
             }
           }
-          .disabled(model.isLoading)
+          .disabled(model.isLoading || !model.canSubmitCredentials)
         } footer: {
           Text("Add **audiobooth://oauth** to audiobookshelf server redirect URIs")
             .textSelection(.enabled)
@@ -160,8 +170,16 @@ extension AuthenticationView {
     var availableAuthMethods: [AuthenticationMethod]
     var shouldAutoLaunchOIDC: Bool
     var onAuthenticationSuccess: () -> Void
+    var hasConfirmedInsecureHTTP: Bool
 
     var shouldDismiss: Bool = false
+    var requiresInsecureHTTPConfirmation: Bool {
+      serverURL?.scheme?.lowercased() == "http"
+    }
+
+    var canSubmitCredentials: Bool {
+      !requiresInsecureHTTPConfirmation || hasConfirmedInsecureHTTP
+    }
 
     func onLoginTapped() {}
     func onOIDCLoginTapped(using session: WebAuthenticationSession) {}
@@ -176,6 +194,7 @@ extension AuthenticationView {
       authenticationMethod: AuthenticationMethod = .usernamePassword,
       availableAuthMethods: [AuthenticationMethod] = [.usernamePassword, .oidc, .apiKey],
       shouldAutoLaunchOIDC: Bool = false,
+      hasConfirmedInsecureHTTP: Bool = false,
       onAuthenticationSuccess: @escaping () -> Void = {}
     ) {
       self.isLoading = isLoading
@@ -186,6 +205,7 @@ extension AuthenticationView {
       self.authenticationMethod = authenticationMethod
       self.availableAuthMethods = availableAuthMethods
       self.shouldAutoLaunchOIDC = shouldAutoLaunchOIDC
+      self.hasConfirmedInsecureHTTP = hasConfirmedInsecureHTTP
       self.onAuthenticationSuccess = onAuthenticationSuccess
     }
   }

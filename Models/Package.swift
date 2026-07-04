@@ -6,6 +6,7 @@ let package = Package(
   name: "Models",
   platforms: [
     .iOS(.v17),
+    .macOS(.v14),
     .watchOS(.v10),
   ],
   products: [
@@ -25,6 +26,10 @@ let package = Package(
         .product(name: "Logging", package: "swift-log"),
         .product(name: "API", package: "API"),
       ]
-    )
+    ),
+    .testTarget(
+      name: "ModelsTests",
+      dependencies: ["Models"]
+    ),
   ]
 )

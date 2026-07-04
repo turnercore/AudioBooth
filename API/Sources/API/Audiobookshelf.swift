@@ -1,6 +1,5 @@
 import Foundation
 import Nuke
-@_exported import NukeUI
 
 public final class Audiobookshelf: @unchecked Sendable {
   public static let shared = Audiobookshelf()

@@ -60,11 +60,10 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ### Getting Started
 
 1. Fork the repository
-2. Clone your fork and install pre-commit hooks:
+2. Clone your fork:
 ```
 git clone https://github.com/AudioBooth/AudioBooth.git
 cd AudioBooth
-pre-commit install
 ```
 3. Create your feature branch (`git checkout -b feature/amazing-feature`)
 4. Make your changes following the project guidelines
@@ -77,6 +76,9 @@ pre-commit install
 - Follow the View/Model/ViewModel architecture pattern
 - Use Swift 6.2 with modern concurrency (async/await)
 - Keep changes simple and focused
+- Run `xcrun swift-format lint --strict --recursive --parallel .`
+- Run `swift test --package-path Models`
+- Run `xcodebuild -project AudioBooth/AudioBooth.xcodeproj -scheme AudioBooth -destination 'generic/platform=iOS' -configuration Debug build CODE_SIGNING_ALLOWED=NO`
 - Test on iPhone, iPad, and Apple Watch when applicable
 
 ## Privacy
@@ -105,7 +107,6 @@ If you encounter any issues or have questions:
 - [Nuke](https://github.com/kean/Nuke) - Efficient image loading and caching
 - [Pulse](https://github.com/kean/Pulse) - Network logger and debugging tool
 - [Readium Swift Toolkit](https://github.com/readium/swift-toolkit) - EPUB and PDF ebook reader
-- [RevenueCat](https://www.revenuecat.com) - In-app purchase support
 - [RichText](https://github.com/NuPlay/RichText) - RichText HTML rendering
 
 ## Acknowledgments

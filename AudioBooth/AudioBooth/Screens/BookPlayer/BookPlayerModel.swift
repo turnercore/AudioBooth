@@ -1226,8 +1226,6 @@ extension BookPlayerModel {
         try? await audiobookshelf.libraries.markAsFinished(bookID: episodeProgressID)
       }
     }
-
-    ReviewRequestManager.shared.recordBookCompletion()
     playerManager.playNext(autoPlay: autoPlayNext)
   }
 

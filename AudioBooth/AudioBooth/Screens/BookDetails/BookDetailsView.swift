@@ -2,6 +2,7 @@ import API
 import Combine
 import CoreNFC
 import Models
+import NukeUI
 import RichText
 import SwiftUI
 

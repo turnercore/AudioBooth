@@ -33,12 +33,6 @@ This information is:
 
 ### Information Automatically Collected
 
-**In-App Purchases (RevenueCat):**
-- When you make an optional tip/donation through the app, RevenueCat processes the transaction
-- RevenueCat may collect: transaction data, device identifiers, and purchase history
-- This data is used solely for purchase processing and restoration
-- RevenueCat's Privacy Policy: https://www.revenuecat.com/privacy
-
 **Apple Watch Sync:**
 - If you use the Apple Watch companion app, playback state and authentication data is synced between your iPhone and Apple Watch
 - This sync occurs only between your devices via iCloud and is not accessible to the developer
@@ -66,14 +60,8 @@ All data is stored locally on your device:
 
 AudioBooth does NOT share your data with third parties, except:
 - **Your audiobookshelf Server:** The app communicates directly with the server URL you provide to stream and download audiobooks
-- **RevenueCat:** Only if you choose to make a purchase through the tip jar feature
 
 ## Third-Party Services
-
-**RevenueCat (In-App Purchases):**
-- Used for processing optional tips/donations
-- Privacy Policy: https://www.revenuecat.com/privacy
-- Terms of Service: https://www.revenuecat.com/terms
 
 **Your audiobookshelf Server:**
 - AudioBooth connects to YOUR self-hosted server
@@ -110,4 +98,4 @@ For questions about this privacy policy or data practices, please contact:
 ---
 
 **Summary:**
-AudioBooth is a privacy-focused client app. Your data stays on your device and your self-hosted server. We don't collect analytics, track usage, or share your information with third parties (except RevenueCat for optional purchases).
+AudioBooth is a privacy-focused client app. Your data stays on your device and your self-hosted server. We don't collect analytics, track usage, or share your information with third parties.
