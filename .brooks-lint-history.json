@@ -1,0 +1,13 @@
+[
+  {
+    "date": "2026-07-04",
+    "mode": "Architecture Audit",
+    "score": 64,
+    "findings": {
+      "critical": 1,
+      "warning": 4,
+      "suggestion": 1
+    },
+    "scope": "entire project"
+  }
+]
