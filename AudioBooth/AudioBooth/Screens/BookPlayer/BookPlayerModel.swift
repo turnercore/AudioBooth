@@ -1075,8 +1075,9 @@ extension BookPlayerModel {
 
     switch reason {
     case .oldDeviceUnavailable:
-      if audioSession.currentRoute.outputs.contains(where: { $0.portType == .airPlay }) {
-        AppLogger.player.info("Audio route changed to AirPlay - keeping playback active")
+      let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+      if previousRoute?.outputs.contains(where: { $0.portType == .airPlay }) == true {
+        AppLogger.player.info("AirPlay route dropped - keeping playback active")
         try? audioSession.setActive(true)
         player?.resume()
         return
