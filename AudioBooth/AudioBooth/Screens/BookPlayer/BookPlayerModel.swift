@@ -427,12 +427,13 @@ extension BookPlayerModel {
 
 extension BookPlayerModel {
   private func setupSession(forceTranscode: Bool) async throws {
+    let shouldForceTranscode = forceTranscode || isAirPlayRouteActive
     item = try await sessionManager.ensureSession(
       itemID: podcastID ?? id,
       episodeID: episodeID,
       item: item,
       mediaProgress: mediaProgress,
-      forceTranscode: forceTranscode
+      forceTranscode: shouldForceTranscode
     )
 
     if let pendingSeekTime {
@@ -1089,6 +1090,23 @@ extension BookPlayerModel {
 
     case .newDeviceAvailable, .override, .routeConfigurationChange, .categoryChange:
       guard isPlaying else { return }
+      if isAirPlayRouteActive {
+        AppLogger.player.info("AirPlay route active - switching to remote transcoded playback")
+        PlaybackDebugLog.write("AirPlay route active: switching to forceTranscode session")
+        let shouldResume = isPlaying
+        player?.pause()
+        pendingPlay = shouldResume
+        Task {
+          do {
+            try await setupSession(forceTranscode: true)
+            reloadPlayer()
+          } catch {
+            AppLogger.player.error("Failed to switch AirPlay playback source: \(error)")
+            PlaybackDebugLog.write("Failed AirPlay source switch: \(error)")
+          }
+        }
+        return
+      }
       AppLogger.player.info("Audio route changed (\(reason.rawValue)) - re-activating session")
       configureAudioSession()
       try? audioSession.setActive(true)
@@ -1280,9 +1298,10 @@ extension BookPlayerModel {
 
     isRecovering = true
 
-    AppLogger.player.warning(
-      "Stream failure detected (attempt \(self.recoveryAttempts)/\(self.maxRecoveryAttempts))"
-    )
+    let message =
+      "Stream failure detected: attempt=\(self.recoveryAttempts) max=\(self.maxRecoveryAttempts) downloaded=\(item?.isDownloaded == true) airPlay=\(isAirPlayRouteActive)"
+    AppLogger.player.warning("\(message)")
+    PlaybackDebugLog.write(message)
 
     Task {
       await recoverSession()
@@ -1338,7 +1357,11 @@ extension BookPlayerModel {
       if !isDownloaded || isAirPlayRouteActive, recoveryAttempts > 1 {
         sessionManager.clearSession()
       }
-      try await setupSession(forceTranscode: isAirPlayRouteActive || recoveryAttempts > 2)
+      let shouldForceTranscode = isAirPlayRouteActive || recoveryAttempts > 2
+      PlaybackDebugLog.write(
+        "Recovering session: attempt=\(recoveryAttempts) downloaded=\(isDownloaded) airPlay=\(isAirPlayRouteActive) forceTranscode=\(shouldForceTranscode)"
+      )
+      try await setupSession(forceTranscode: shouldForceTranscode)
 
       if !isDownloaded || isAirPlayRouteActive {
         reloadPlayer()

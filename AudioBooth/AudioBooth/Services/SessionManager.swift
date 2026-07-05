@@ -60,7 +60,10 @@ extension SessionManager {
     }
 
     if let item, let current, isSameItem {
-      if item.isDownloaded, current.isRemote {
+      if forceTranscode {
+        AppLogger.session.info("Closing existing session to start forced transcode session")
+        try? await closeSession()
+      } else if item.isDownloaded, current.isRemote {
         AppLogger.session.info(
           "Item is now downloaded, closing remote session to switch to local session"
         )

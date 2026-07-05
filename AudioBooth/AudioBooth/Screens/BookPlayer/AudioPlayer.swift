@@ -77,6 +77,7 @@ final class AudioPlayer {
     self.session = session
     player.allowsExternalPlayback = true
     player.automaticallyWaitsToMinimizeStalling = true
+    PlaybackDebugLog.reset()
     setupObservers()
   }
 
@@ -252,7 +253,9 @@ private extension AudioPlayer {
     } else {
       source = "remote"
     }
-    AppLogger.player.info("Preparing player item: source=\(source) ext=\(url.pathExtension)")
+    let itemMessage = "Preparing player item: source=\(source) ext=\(url.pathExtension)"
+    AppLogger.player.info("\(itemMessage)")
+    PlaybackDebugLog.write(itemMessage)
     let item = AVPlayerItem(
       url: url,
       headers: assetHeaders(for: url)
@@ -377,7 +380,12 @@ private extension AudioPlayer {
     NotificationCenter.default.publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item)
       .sink { [weak self] notification in
         let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-        AppLogger.player.error("Failed to play to end: \(error?.localizedDescription ?? "Unknown")")
+        let nsError = error as NSError?
+        let underlying = nsError?.userInfo[NSUnderlyingErrorKey] as? NSError
+        let message =
+          "Failed to play to end: error=\(nsError?.domain ?? "nil")/\(nsError?.code ?? 0) underlying=\(underlying?.domain ?? "nil")/\(underlying?.code ?? 0)"
+        AppLogger.player.error("\(message)")
+        PlaybackDebugLog.write(message)
         self?.events.send(.error(error))
       }
       .store(in: &itemObservers)

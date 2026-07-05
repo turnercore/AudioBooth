@@ -61,13 +61,14 @@ public final class PlaybackSession {
   }
 
   public func url(for track: Track) -> URL? {
+    if let contentURLPath = track.contentURLPath, contentURLPath.starts(with: "/hls") {
+      guard let baseURL else { return nil }
+      return serverRootURL(from: baseURL)?.appending(path: String(contentURLPath.dropFirst()))
+    }
     if let localPath = track.localPath {
       return localPath
     }
     guard let baseURL else { return nil }
-    if let contentURLPath = track.contentURLPath, contentURLPath.starts(with: "/hls") {
-      return serverRootURL(from: baseURL)?.appending(path: String(contentURLPath.dropFirst()))
-    }
     return baseURL.appendingPathComponent("track/\(track.index)")
   }
 
