@@ -321,6 +321,7 @@ private extension AudioPlayer {
       .removeDuplicates()
       .sink { [weak self] status in
         guard let self else { return }
+        PlaybackDebugLog.write("Player timeControlStatus: \(status.debugName)")
         switch status {
         case .paused:
           self.events.send(.stateChanged(.paused))
@@ -342,7 +343,11 @@ private extension AudioPlayer {
   }
 
   func handleCurrentItemChange(_ item: AVPlayerItem?) {
-    guard let item else { return }
+    guard let item else {
+      PlaybackDebugLog.write("Player currentItem: nil")
+      return
+    }
+    PlaybackDebugLog.write("Player currentItem changed: status=\(item.status.debugName)")
     AppLogger.player.debug("Now playing track \(self.currentTrackIndex)/\(self.tracks.count)")
     observeItem(item)
     topUpQueue()
@@ -432,6 +437,28 @@ private extension AudioPlayer {
 private extension AVPlayer {
   var currentSeconds: TimeInterval {
     currentTime().seconds.isNaN ? 0 : currentTime().seconds
+  }
+}
+
+private extension AVPlayer.TimeControlStatus {
+  var debugName: String {
+    switch self {
+    case .paused: "paused"
+    case .waitingToPlayAtSpecifiedRate: "waiting"
+    case .playing: "playing"
+    @unknown default: "unknown"
+    }
+  }
+}
+
+private extension AVPlayerItem.Status {
+  var debugName: String {
+    switch self {
+    case .unknown: "unknown"
+    case .readyToPlay: "readyToPlay"
+    case .failed: "failed"
+    @unknown default: "unknown"
+    }
   }
 }
 

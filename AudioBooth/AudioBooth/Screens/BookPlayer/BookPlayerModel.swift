@@ -1038,9 +1038,11 @@ extension BookPlayerModel {
     switch type {
     case .began:
       AppLogger.player.info("Audio interruption began")
+      PlaybackDebugLog.write("Audio interruption began route=\(routeDebugName(audioSession.currentRoute))")
       interruptionBeganAt = isPlaying ? Date() : nil
 
     case .ended:
+      PlaybackDebugLog.write("Audio interruption ended route=\(routeDebugName(audioSession.currentRoute))")
       applySmartRewind(reason: .onInterruption)
 
       if interruptionBeganAt != nil,
@@ -1075,9 +1077,13 @@ extension BookPlayerModel {
       return
     }
 
+    let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+    PlaybackDebugLog.write(
+      "Route changed: reason=\(reason.debugName) previous=\(previousRoute.map(routeDebugName) ?? "nil") current=\(routeDebugName(audioSession.currentRoute)) isPlaying=\(isPlaying)"
+    )
+
     switch reason {
     case .oldDeviceUnavailable:
-      let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
       if previousRoute?.outputs.contains(where: { $0.portType == .airPlay }) == true {
         AppLogger.player.info("AirPlay route dropped - keeping playback active")
         configureAudioSession()
@@ -1121,6 +1127,7 @@ extension BookPlayerModel {
     AppLogger.player.warning(
       "Media services were reset - recreating player and audio session"
     )
+    PlaybackDebugLog.write("Media services reset route=\(routeDebugName(audioSession.currentRoute))")
 
     let wasPlaying = isPlaying
     player?.stop()
@@ -1389,5 +1396,25 @@ extension BookPlayerModel {
 
   private var isAirPlayRouteActive: Bool {
     audioSession.currentRoute.outputs.contains { $0.portType == .airPlay }
+  }
+
+  private func routeDebugName(_ route: AVAudioSessionRouteDescription) -> String {
+    route.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
+  }
+}
+
+private extension AVAudioSession.RouteChangeReason {
+  var debugName: String {
+    switch self {
+    case .unknown: "unknown"
+    case .newDeviceAvailable: "newDeviceAvailable"
+    case .oldDeviceUnavailable: "oldDeviceUnavailable"
+    case .categoryChange: "categoryChange"
+    case .override: "override"
+    case .wakeFromSleep: "wakeFromSleep"
+    case .noSuitableRouteForCategory: "noSuitableRouteForCategory"
+    case .routeConfigurationChange: "routeConfigurationChange"
+    @unknown default: "unknown"
+    }
   }
 }
