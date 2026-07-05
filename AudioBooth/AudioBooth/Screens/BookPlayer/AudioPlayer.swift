@@ -74,7 +74,7 @@ final class AudioPlayer {
   init(mediaProgress: MediaProgress, session: PlaybackSession) {
     self.mediaProgress = mediaProgress
     self.session = session
-    player.allowsExternalPlayback = false
+    player.allowsExternalPlayback = true
     player.automaticallyWaitsToMinimizeStalling = false
     setupObservers()
   }

@@ -602,14 +602,18 @@ extension BookPlayer.Model {
 }
 
 struct AirPlayButton: UIViewRepresentable {
+  var tintColor: UIColor = .white
+
   func makeUIView(context: Context) -> AVRoutePickerView {
     let routePickerView = AVRoutePickerView()
     routePickerView.backgroundColor = UIColor.clear
-    routePickerView.tintColor = UIColor.white
+    routePickerView.tintColor = tintColor
     return routePickerView
   }
 
-  func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+  func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
+    uiView.tintColor = tintColor
+  }
 }
 
 #Preview {
