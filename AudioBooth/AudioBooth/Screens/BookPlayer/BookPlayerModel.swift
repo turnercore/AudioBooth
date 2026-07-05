@@ -881,9 +881,10 @@ extension BookPlayerModel {
           self.widgetManager.update()
 
         case .stalled:
-          AppLogger.player.warning("Playback stalled, pausing")
-          self.isLoading = false
-          player.pause()
+          AppLogger.player.warning("Playback stalled, waiting for playback to recover")
+          self.isLoading = true
+          try? self.audioSession.setActive(true)
+          player.resume()
 
         case .error(let error):
           AppLogger.player.error("Player error: \(error?.localizedDescription ?? "Unknown")")
@@ -1078,6 +1079,7 @@ extension BookPlayerModel {
       let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
       if previousRoute?.outputs.contains(where: { $0.portType == .airPlay }) == true {
         AppLogger.player.info("AirPlay route dropped - keeping playback active")
+        configureAudioSession()
         try? audioSession.setActive(true)
         player?.resume()
         return
@@ -1119,7 +1121,18 @@ extension BookPlayerModel {
   }
 
   private func handleVolumeChange(from old: Float, to new: Float) {
-    AppLogger.player.debug("Output volume changed from \(old) to \(new)")
+    if new == 0 && old > 0 {
+      AppLogger.player.info("Volume dropped to 0 - pausing playback")
+      interruptionBeganAt = isPlaying ? Date() : nil
+      player?.pause()
+    } else if new > 0 && old == 0, let beganAt = interruptionBeganAt {
+      if Date().timeIntervalSince(beganAt) < 60 * 5 {
+        AppLogger.player.info("Volume restored from 0 - resuming playback")
+        applySmartRewind(reason: .onInterruption)
+        player?.resume()
+      }
+      interruptionBeganAt = nil
+    }
   }
 }
 
