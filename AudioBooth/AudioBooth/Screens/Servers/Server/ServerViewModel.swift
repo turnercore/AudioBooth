@@ -466,7 +466,7 @@ final class ServerViewModel: ServerView.Model {
     selectedLibrary = nil
 
     if let appGroupURL = FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+      forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
     ) {
       let serverDirectory = appGroupURL.appendingPathComponent(serverID)
 

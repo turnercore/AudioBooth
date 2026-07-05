@@ -10,7 +10,7 @@ import SwiftData
 final class DownloadManager: NSObject, ObservableObject {
   static let shared = DownloadManager()
 
-  static let appGroupIdentifier = "group.me.jgrenier.audioBS"
+  static let appGroupIdentifier = "group.com.turnercore.audioBS"
 
   static let backgroundSessionPrefix = "me.jgrenier.AudioBS.download."
 

@@ -507,7 +507,7 @@ extension HomePageModel {
       let coverURL: URL?
     }
 
-    let sharedDefaults = UserDefaults(suiteName: "group.me.jgrenier.audioBS")
+    let sharedDefaults = UserDefaults(suiteName: "group.com.turnercore.audioBS")
 
     do {
       let allProgress = try MediaProgress.fetchAll()

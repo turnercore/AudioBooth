@@ -57,7 +57,7 @@ public final class LocalBook {
 
     guard
       let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else {
       return nil

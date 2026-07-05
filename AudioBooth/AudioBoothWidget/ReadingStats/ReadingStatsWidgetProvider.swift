@@ -30,7 +30,7 @@ struct ReadingStatsWidgetProvider: TimelineProvider {
   }
 
   private func loadStats() -> WidgetStatsData? {
-    guard let sharedDefaults = UserDefaults(suiteName: "group.me.jgrenier.audioBS"),
+    guard let sharedDefaults = UserDefaults(suiteName: "group.com.turnercore.audioBS"),
       let data = sharedDefaults.data(forKey: "listeningStats"),
       let stats = try? JSONDecoder().decode(WidgetStatsData.self, from: data)
     else {

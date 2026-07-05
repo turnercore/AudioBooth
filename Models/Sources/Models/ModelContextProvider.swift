@@ -123,7 +123,7 @@ public final class ModelContextProvider {
   private func databaseURL(for serverID: String) -> URL {
     let containerURL =
       FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
       ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
 

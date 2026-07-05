@@ -13,7 +13,7 @@ struct RectangularBookWidgetView: View {
   }
   let action: Action
 
-  @AppStorage("timeRemainingAdjustsWithSpeed", store: UserDefaults(suiteName: "group.me.jgrenier.audioBS"))
+  @AppStorage("timeRemainingAdjustsWithSpeed", store: UserDefaults(suiteName: "group.com.turnercore.audioBS"))
   var timeRemainingAdjustsWithSpeed: Bool = true
 
   var body: some View {

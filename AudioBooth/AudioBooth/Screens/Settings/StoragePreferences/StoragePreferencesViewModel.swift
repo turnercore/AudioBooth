@@ -69,7 +69,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   override func onRemoveDownload(bookID: String, serverID: String) {
     guard
       let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else { return }
 
@@ -133,7 +133,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   ) {
     guard
       let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else {
       return (0, 0, 0, 0)
@@ -191,7 +191,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
 
     guard
       let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else { return [] }
 
