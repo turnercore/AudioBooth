@@ -167,7 +167,7 @@ final class AudioPlayer {
 }
 
 private extension AudioPlayer {
-  static let maxQueuedItems = 3
+  static let normalMaxQueuedItems = 3
 
   func loadQueue(from index: Int, seekTo offset: TimeInterval, autoPlay: Bool) {
     guard tracks.indices.contains(index) else { return }
@@ -231,7 +231,7 @@ private extension AudioPlayer {
   }
 
   func topUpQueue() {
-    while player.items().count < Self.maxQueuedItems {
+    while player.items().count < maxQueuedItems {
       let nextIndex = lastQueuedIndex + 1
       guard tracks.indices.contains(nextIndex) else { break }
       lastQueuedIndex = nextIndex
@@ -239,6 +239,11 @@ private extension AudioPlayer {
       player.insert(item, after: nil)
     }
     applyEQToUpcoming()
+  }
+
+  var maxQueuedItems: Int {
+    isAirPlayRouteActive && tracks.contains { $0.contentURLPath?.starts(with: "/hls") == true }
+      ? 1 : Self.normalMaxQueuedItems
   }
 
   func makeItem(at index: Int) -> AVPlayerItem? {
@@ -276,6 +281,10 @@ private extension AudioPlayer {
     var headers = server.customHeaders
     headers["Authorization"] = server.token.bearer
     return headers
+  }
+
+  var isAirPlayRouteActive: Bool {
+    AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay }
   }
 
   func applyEQToUpcoming() {
@@ -350,7 +359,12 @@ private extension AudioPlayer {
         case .readyToPlay:
           self.events.send(.stateChanged(.ready))
         case .failed:
-          AppLogger.player.error("Player item failed: \(item.error?.localizedDescription ?? "Unknown")")
+          let nsError = item.error as NSError?
+          let underlying = nsError?.userInfo[NSUnderlyingErrorKey] as? NSError
+          let message =
+            "Player item failed: error=\(nsError?.domain ?? "nil")/\(nsError?.code ?? 0) underlying=\(underlying?.domain ?? "nil")/\(underlying?.code ?? 0)"
+          AppLogger.player.error("\(message)")
+          PlaybackDebugLog.write(message)
           self.events.send(.error(item.error))
         default:
           break
