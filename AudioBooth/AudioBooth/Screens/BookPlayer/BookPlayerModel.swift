@@ -1273,7 +1273,7 @@ extension BookPlayerModel {
       return
     }
 
-    guard item?.isDownloaded != true else {
+    guard item?.isDownloaded != true || isAirPlayRouteActive else {
       AppLogger.player.debug("Book is downloaded, cannot recover from stream failure")
       return
     }
@@ -1325,7 +1325,7 @@ extension BookPlayerModel {
     player?.pause()
     isLoading = true
 
-    if !isDownloaded {
+    if !isDownloaded || isAirPlayRouteActive {
       Toast(message: "Reconnecting...").show()
     }
 
@@ -1335,12 +1335,12 @@ extension BookPlayerModel {
     }
 
     do {
-      if !isDownloaded, recoveryAttempts > 1 {
+      if !isDownloaded || isAirPlayRouteActive, recoveryAttempts > 1 {
         sessionManager.clearSession()
       }
-      try await setupSession(forceTranscode: recoveryAttempts > 2)
+      try await setupSession(forceTranscode: isAirPlayRouteActive || recoveryAttempts > 2)
 
-      if !isDownloaded {
+      if !isDownloaded || isAirPlayRouteActive {
         reloadPlayer()
         Toast(message: "Reconnected").show()
       } else {
@@ -1355,12 +1355,16 @@ extension BookPlayerModel {
       isLoading = false
       isRecovering = false
 
-      if recoveryAttempts < maxRecoveryAttempts && !isDownloaded {
+      if recoveryAttempts < maxRecoveryAttempts && (!isDownloaded || isAirPlayRouteActive) {
         handleStreamFailure(error: error)
       } else {
         Toast(error: "Unable to reconnect. Please try again later.").show()
         playerManager.clearCurrent()
       }
     }
+  }
+
+  private var isAirPlayRouteActive: Bool {
+    audioSession.currentRoute.outputs.contains { $0.portType == .airPlay }
   }
 }

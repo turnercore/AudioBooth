@@ -36,6 +36,7 @@ final class AudioPlayer {
   private(set) var currentTrackIndex: Int = 0
   private var lastQueuedIndex: Int = -1
   private var timeObserver: Any?
+  private var pendingPlaybackObserver: AnyCancellable?
   private var cancellables = Set<AnyCancellable>()
   private var itemObservers = Set<AnyCancellable>()
 
@@ -74,7 +75,7 @@ final class AudioPlayer {
   init(mediaProgress: MediaProgress, session: PlaybackSession) {
     self.mediaProgress = mediaProgress
     self.session = session
-    player.allowsExternalPlayback = false
+    player.allowsExternalPlayback = true
     player.automaticallyWaitsToMinimizeStalling = true
     setupObservers()
   }
@@ -122,6 +123,8 @@ final class AudioPlayer {
 
   func stop() {
     removeTimeObserver()
+    pendingPlaybackObserver?.cancel()
+    pendingPlaybackObserver = nil
     player.pause()
     player.removeAllItems()
     events.send(.stateChanged(.stopped))
@@ -183,8 +186,46 @@ private extension AudioPlayer {
     }
 
     if autoPlay {
+      playWhenReady(player.items().first)
+    }
+  }
+
+  func playWhenReady(_ item: AVPlayerItem?) {
+    pendingPlaybackObserver?.cancel()
+    pendingPlaybackObserver = nil
+
+    guard let item, player.currentItem === item else { return }
+
+    switch item.status {
+    case .readyToPlay:
       player.play()
       player.rate = player.defaultRate
+    case .failed:
+      events.send(.error(item.error))
+    case .unknown:
+      pendingPlaybackObserver = item.publisher(for: \.status)
+        .removeDuplicates()
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self, weak item] status in
+          guard let self, let item, self.player.currentItem === item else { return }
+          switch status {
+          case .readyToPlay:
+            self.pendingPlaybackObserver?.cancel()
+            self.pendingPlaybackObserver = nil
+            self.player.play()
+            self.player.rate = self.player.defaultRate
+          case .failed:
+            self.pendingPlaybackObserver?.cancel()
+            self.pendingPlaybackObserver = nil
+            self.events.send(.error(item.error))
+          case .unknown:
+            break
+          @unknown default:
+            break
+          }
+        }
+    @unknown default:
+      break
     }
   }
 
@@ -201,14 +242,37 @@ private extension AudioPlayer {
 
   func makeItem(at index: Int) -> AVPlayerItem? {
     guard index < tracks.count, let url = url(for: tracks[index]) else { return nil }
-    return AVPlayerItem(
+    let source: String
+    if url.isFileURL {
+      source = "file"
+    } else if url.path.contains("/public/session/") {
+      source = "publicSession"
+    } else if tracks[index].contentURLPath?.starts(with: "/hls") == true {
+      source = "hls"
+    } else {
+      source = "remote"
+    }
+    AppLogger.player.info("Preparing player item: source=\(source) ext=\(url.pathExtension)")
+    let item = AVPlayerItem(
       url: url,
-      headers: Audiobookshelf.shared.authentication.server?.customHeaders
+      headers: assetHeaders(for: url)
     )
+    if tracks[index].contentURLPath?.starts(with: "/hls") == true {
+      item.preferredForwardBufferDuration = 50
+    }
+    return item
   }
 
   func url(for track: Track) -> URL? {
     session.url(for: track)
+  }
+
+  func assetHeaders(for url: URL) -> [String: String]? {
+    guard !url.isFileURL, !url.path.contains("/public/session/") else { return nil }
+    guard let server = Audiobookshelf.shared.authentication.server else { return nil }
+    var headers = server.customHeaders
+    headers["Authorization"] = server.token.bearer
+    return headers
   }
 
   func applyEQToUpcoming() {
@@ -314,7 +378,7 @@ private extension AudioPlayer {
       .sink { [weak self] notification in
         let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
         AppLogger.player.error("Failed to play to end: \(error?.localizedDescription ?? "Unknown")")
-        self?.events.send(.stalled)
+        self?.events.send(.error(error))
       }
       .store(in: &itemObservers)
 

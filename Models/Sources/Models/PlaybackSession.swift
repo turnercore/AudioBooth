@@ -65,7 +65,18 @@ public final class PlaybackSession {
       return localPath
     }
     guard let baseURL else { return nil }
+    if let contentURLPath = track.contentURLPath, contentURLPath.starts(with: "/hls") {
+      return serverRootURL(from: baseURL)?.appending(path: String(contentURLPath.dropFirst()))
+    }
     return baseURL.appendingPathComponent("track/\(track.index)")
+  }
+
+  private func serverRootURL(from url: URL) -> URL? {
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.path = ""
+    components?.query = nil
+    components?.fragment = nil
+    return components?.url
   }
 }
 

@@ -26,7 +26,8 @@ extension Track {
       codec: track.codec,
       channels: track.channels,
       channelLayout: track.channelLayout,
-      mimeType: track.mimeType
+      mimeType: track.mimeType,
+      contentURLPath: track.contentUrl
     )
   }
 }

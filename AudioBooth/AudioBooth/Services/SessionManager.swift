@@ -73,7 +73,7 @@ extension SessionManager {
       }
     }
 
-    if let item, item.isDownloaded {
+    if let item, item.isDownloaded, !forceTranscode {
       startLocalSession(
         libraryItemID: itemID,
         episodeID: episodeID,
