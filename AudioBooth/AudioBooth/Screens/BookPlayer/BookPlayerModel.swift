@@ -1119,18 +1119,7 @@ extension BookPlayerModel {
   }
 
   private func handleVolumeChange(from old: Float, to new: Float) {
-    if new == 0 && old > 0 {
-      AppLogger.player.info("Volume dropped to 0 - pausing playback")
-      interruptionBeganAt = isPlaying ? Date() : nil
-      player?.pause()
-    } else if new > 0 && old == 0, let beganAt = interruptionBeganAt {
-      if Date().timeIntervalSince(beganAt) < 60 * 5 {
-        AppLogger.player.info("Volume restored from 0 - resuming playback")
-        applySmartRewind(reason: .onInterruption)
-        player?.resume()
-      }
-      interruptionBeganAt = nil
-    }
+    AppLogger.player.debug("Output volume changed from \(old) to \(new)")
   }
 }
 
