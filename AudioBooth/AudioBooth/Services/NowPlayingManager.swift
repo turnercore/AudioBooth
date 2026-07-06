@@ -1,4 +1,5 @@
 import API
+import AVFoundation
 import Combine
 import Foundation
 import Logging
@@ -35,6 +36,8 @@ final class NowPlayingManager {
     self.title = title
     self.author = author
 
+    primeNowPlaying()
+
     info[MPNowPlayingInfoPropertyExternalContentIdentifier] = id
     info[MPNowPlayingInfoPropertyExternalUserProfileIdentifier] = Audiobookshelf.shared.authentication.server?.id
 
@@ -51,6 +54,27 @@ final class NowPlayingManager {
 
     if let coverURL {
       loadArtwork(from: coverURL)
+    }
+  }
+
+  private func primeNowPlaying() {
+    Task {
+      do {
+        let audioSession = AVAudioSession.sharedInstance()
+        guard !audioSession.secondaryAudioShouldBeSilencedHint else { return }
+
+        try audioSession.setCategory(.playback, mode: .spokenAudio, policy: .longFormAudio)
+        try audioSession.setActive(true)
+
+        let url = URL(string: "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=")!
+        let player = AVPlayer(url: url)
+        player.allowsExternalPlayback = false
+        player.volume = 0
+        player.play()
+        try? await Task.sleep(for: .milliseconds(500))
+      } catch {
+        AppLogger.player.debug("Failed to prime Now Playing: \(error)")
+      }
     }
   }
 

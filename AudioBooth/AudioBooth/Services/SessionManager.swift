@@ -21,7 +21,6 @@ final class SessionManager {
   private let audiobookshelf = Audiobookshelf.shared
 
   private(set) var current: PlaybackSession?
-  private var currentForceTranscode = false
   private var lastSyncAt = Date()
   private var inactivityTask: Task<Void, Never>?
 
@@ -31,7 +30,6 @@ final class SessionManager {
 
   func clearSession() {
     current = nil
-    currentForceTranscode = false
     UserDefaults.standard.set(0, forKey: retryCountKey)
     cancelScheduledSessionClose()
     cancelInactivityTask()
@@ -62,17 +60,7 @@ extension SessionManager {
     }
 
     if let item, let current, isSameItem {
-      if forceTranscode {
-        if currentForceTranscode {
-          AppLogger.session.debug(
-            "Forced transcode session already exists for this book, reusing: \(current.id)"
-          )
-          return item
-        } else {
-          AppLogger.session.info("Closing existing session to start forced transcode session")
-          try? await closeSession()
-        }
-      } else if item.isDownloaded, current.isRemote {
+      if item.isDownloaded, current.isRemote {
         AppLogger.session.info(
           "Item is now downloaded, closing remote session to switch to local session"
         )
@@ -85,7 +73,7 @@ extension SessionManager {
       }
     }
 
-    if let item, item.isDownloaded, !forceTranscode {
+    if let item, item.isDownloaded {
       startLocalSession(
         libraryItemID: itemID,
         episodeID: episodeID,
@@ -208,7 +196,6 @@ extension SessionManager {
       audiobookshelfSession.audioTracks?.map(Track.init) ?? updatedItem.orderedTracks
     try playbackSession.save()
     current = playbackSession
-    currentForceTranscode = forceTranscode
 
     UserDefaults.standard.set(0, forKey: retryCountKey)
     scheduleSessionClose()
@@ -240,7 +227,6 @@ extension SessionManager {
     session.tracks = item.orderedTracks
     try? session.save()
     current = session
-    currentForceTranscode = false
     AppLogger.session.info("Started local session: \(session.id)")
   }
 
@@ -291,7 +277,6 @@ extension SessionManager {
             "Book is downloaded, clearing session to allow local session creation"
           )
           current = nil
-          currentForceTranscode = false
           UserDefaults.standard.removeObject(forKey: sessionIDKey)
           UserDefaults.standard.removeObject(forKey: retryCountKey)
           cancelScheduledSessionClose()
@@ -304,7 +289,6 @@ extension SessionManager {
             "Maximum retry attempts reached. Giving up on closing session \(session.id). Session will auto-expire on server after 24h."
           )
           current = nil
-          currentForceTranscode = false
           UserDefaults.standard.removeObject(forKey: sessionIDKey)
           UserDefaults.standard.removeObject(forKey: retryCountKey)
           cancelScheduledSessionClose()
@@ -322,7 +306,6 @@ extension SessionManager {
         throw error
       }
       current = nil
-      currentForceTranscode = false
     } else {
       do {
         let sessionSync = SessionSync(session)
@@ -340,7 +323,6 @@ extension SessionManager {
         )
       }
       current = nil
-      currentForceTranscode = false
     }
   }
 }

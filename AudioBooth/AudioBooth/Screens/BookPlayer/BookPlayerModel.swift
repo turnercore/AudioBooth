@@ -427,13 +427,12 @@ extension BookPlayerModel {
 
 extension BookPlayerModel {
   private func setupSession(forceTranscode: Bool) async throws {
-    let shouldForceTranscode = forceTranscode || isAirPlayRouteActive
     item = try await sessionManager.ensureSession(
       itemID: podcastID ?? id,
       episodeID: episodeID,
       item: item,
       mediaProgress: mediaProgress,
-      forceTranscode: shouldForceTranscode
+      forceTranscode: forceTranscode
     )
 
     if let pendingSeekTime {
@@ -882,10 +881,9 @@ extension BookPlayerModel {
           self.widgetManager.update()
 
         case .stalled:
-          AppLogger.player.warning("Playback stalled, waiting for playback to recover")
-          self.isLoading = true
-          try? self.audioSession.setActive(true)
-          player.resume()
+          AppLogger.player.warning("Playback stalled, pausing")
+          self.isLoading = false
+          player.pause()
 
         case .error(let error):
           AppLogger.player.error("Player error: \(error?.localizedDescription ?? "Unknown")")
@@ -1038,11 +1036,9 @@ extension BookPlayerModel {
     switch type {
     case .began:
       AppLogger.player.info("Audio interruption began")
-      PlaybackDebugLog.write("Audio interruption began route=\(routeDebugName(audioSession.currentRoute))")
       interruptionBeganAt = isPlaying ? Date() : nil
 
     case .ended:
-      PlaybackDebugLog.write("Audio interruption ended route=\(routeDebugName(audioSession.currentRoute))")
       applySmartRewind(reason: .onInterruption)
 
       if interruptionBeganAt != nil,
@@ -1077,42 +1073,13 @@ extension BookPlayerModel {
       return
     }
 
-    let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
-    PlaybackDebugLog.write(
-      "Route changed: reason=\(reason.debugName) previous=\(previousRoute.map(routeDebugName) ?? "nil") current=\(routeDebugName(audioSession.currentRoute)) isPlaying=\(isPlaying)"
-    )
-
     switch reason {
     case .oldDeviceUnavailable:
-      if previousRoute?.outputs.contains(where: { $0.portType == .airPlay }) == true {
-        AppLogger.player.info("AirPlay route dropped - keeping playback active")
-        configureAudioSession()
-        try? audioSession.setActive(true)
-        player?.resume()
-        return
-      }
       AppLogger.player.info("Audio route changed (old device unavailable) - pausing")
       player?.pause()
 
     case .newDeviceAvailable, .override, .routeConfigurationChange, .categoryChange:
       guard isPlaying else { return }
-      if isAirPlayRouteActive {
-        AppLogger.player.info("AirPlay route active - switching to remote transcoded playback")
-        PlaybackDebugLog.write("AirPlay route active: switching to forceTranscode session")
-        let shouldResume = isPlaying
-        player?.pause()
-        pendingPlay = shouldResume
-        Task {
-          do {
-            try await setupSession(forceTranscode: true)
-            reloadPlayer()
-          } catch {
-            AppLogger.player.error("Failed to switch AirPlay playback source: \(error)")
-            PlaybackDebugLog.write("Failed AirPlay source switch: \(error)")
-          }
-        }
-        return
-      }
       AppLogger.player.info("Audio route changed (\(reason.rawValue)) - re-activating session")
       configureAudioSession()
       try? audioSession.setActive(true)
@@ -1127,7 +1094,6 @@ extension BookPlayerModel {
     AppLogger.player.warning(
       "Media services were reset - recreating player and audio session"
     )
-    PlaybackDebugLog.write("Media services reset route=\(routeDebugName(audioSession.currentRoute))")
 
     let wasPlaying = isPlaying
     player?.stop()
@@ -1298,17 +1264,16 @@ extension BookPlayerModel {
       return
     }
 
-    guard item?.isDownloaded != true || isAirPlayRouteActive else {
+    guard item?.isDownloaded != true else {
       AppLogger.player.debug("Book is downloaded, cannot recover from stream failure")
       return
     }
 
     isRecovering = true
 
-    let message =
-      "Stream failure detected: attempt=\(self.recoveryAttempts) max=\(self.maxRecoveryAttempts) downloaded=\(item?.isDownloaded == true) airPlay=\(isAirPlayRouteActive)"
-    AppLogger.player.warning("\(message)")
-    PlaybackDebugLog.write(message)
+    AppLogger.player.warning(
+      "Stream failure detected (attempt \(self.recoveryAttempts)/\(self.maxRecoveryAttempts))"
+    )
 
     Task {
       await recoverSession()
@@ -1351,7 +1316,7 @@ extension BookPlayerModel {
     player?.pause()
     isLoading = true
 
-    if !isDownloaded || isAirPlayRouteActive {
+    if !isDownloaded {
       Toast(message: "Reconnecting...").show()
     }
 
@@ -1361,16 +1326,12 @@ extension BookPlayerModel {
     }
 
     do {
-      if !isDownloaded || isAirPlayRouteActive, recoveryAttempts > 1 {
+      if !isDownloaded, recoveryAttempts > 1 {
         sessionManager.clearSession()
       }
-      let shouldForceTranscode = isAirPlayRouteActive || recoveryAttempts > 2
-      PlaybackDebugLog.write(
-        "Recovering session: attempt=\(recoveryAttempts) downloaded=\(isDownloaded) airPlay=\(isAirPlayRouteActive) forceTranscode=\(shouldForceTranscode)"
-      )
-      try await setupSession(forceTranscode: shouldForceTranscode)
+      try await setupSession(forceTranscode: recoveryAttempts > 2)
 
-      if !isDownloaded || isAirPlayRouteActive {
+      if !isDownloaded {
         reloadPlayer()
         Toast(message: "Reconnected").show()
       } else {
@@ -1385,36 +1346,12 @@ extension BookPlayerModel {
       isLoading = false
       isRecovering = false
 
-      if recoveryAttempts < maxRecoveryAttempts && (!isDownloaded || isAirPlayRouteActive) {
+      if recoveryAttempts < maxRecoveryAttempts && !isDownloaded {
         handleStreamFailure(error: error)
       } else {
         Toast(error: "Unable to reconnect. Please try again later.").show()
         playerManager.clearCurrent()
       }
-    }
-  }
-
-  private var isAirPlayRouteActive: Bool {
-    audioSession.currentRoute.outputs.contains { $0.portType == .airPlay }
-  }
-
-  private func routeDebugName(_ route: AVAudioSessionRouteDescription) -> String {
-    route.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
-  }
-}
-
-private extension AVAudioSession.RouteChangeReason {
-  var debugName: String {
-    switch self {
-    case .unknown: "unknown"
-    case .newDeviceAvailable: "newDeviceAvailable"
-    case .oldDeviceUnavailable: "oldDeviceUnavailable"
-    case .categoryChange: "categoryChange"
-    case .override: "override"
-    case .wakeFromSleep: "wakeFromSleep"
-    case .noSuitableRouteForCategory: "noSuitableRouteForCategory"
-    case .routeConfigurationChange: "routeConfigurationChange"
-    @unknown default: "unknown"
     }
   }
 }

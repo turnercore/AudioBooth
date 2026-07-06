@@ -36,7 +36,6 @@ final class AudioPlayer {
   private(set) var currentTrackIndex: Int = 0
   private var lastQueuedIndex: Int = -1
   private var timeObserver: Any?
-  private var pendingPlaybackObserver: AnyCancellable?
   private var cancellables = Set<AnyCancellable>()
   private var itemObservers = Set<AnyCancellable>()
 
@@ -75,9 +74,8 @@ final class AudioPlayer {
   init(mediaProgress: MediaProgress, session: PlaybackSession) {
     self.mediaProgress = mediaProgress
     self.session = session
-    player.allowsExternalPlayback = true
-    player.automaticallyWaitsToMinimizeStalling = true
-    PlaybackDebugLog.reset()
+    player.allowsExternalPlayback = false
+    player.automaticallyWaitsToMinimizeStalling = false
     setupObservers()
   }
 
@@ -124,8 +122,6 @@ final class AudioPlayer {
 
   func stop() {
     removeTimeObserver()
-    pendingPlaybackObserver?.cancel()
-    pendingPlaybackObserver = nil
     player.pause()
     player.removeAllItems()
     events.send(.stateChanged(.stopped))
@@ -167,7 +163,7 @@ final class AudioPlayer {
 }
 
 private extension AudioPlayer {
-  static let normalMaxQueuedItems = 3
+  static let maxQueuedItems = 3
 
   func loadQueue(from index: Int, seekTo offset: TimeInterval, autoPlay: Bool) {
     guard tracks.indices.contains(index) else { return }
@@ -187,51 +183,13 @@ private extension AudioPlayer {
     }
 
     if autoPlay {
-      playWhenReady(player.items().first)
-    }
-  }
-
-  func playWhenReady(_ item: AVPlayerItem?) {
-    pendingPlaybackObserver?.cancel()
-    pendingPlaybackObserver = nil
-
-    guard let item, player.currentItem === item else { return }
-
-    switch item.status {
-    case .readyToPlay:
       player.play()
       player.rate = player.defaultRate
-    case .failed:
-      events.send(.error(item.error))
-    case .unknown:
-      pendingPlaybackObserver = item.publisher(for: \.status)
-        .removeDuplicates()
-        .receive(on: DispatchQueue.main)
-        .sink { [weak self, weak item] status in
-          guard let self, let item, self.player.currentItem === item else { return }
-          switch status {
-          case .readyToPlay:
-            self.pendingPlaybackObserver?.cancel()
-            self.pendingPlaybackObserver = nil
-            self.player.play()
-            self.player.rate = self.player.defaultRate
-          case .failed:
-            self.pendingPlaybackObserver?.cancel()
-            self.pendingPlaybackObserver = nil
-            self.events.send(.error(item.error))
-          case .unknown:
-            break
-          @unknown default:
-            break
-          }
-        }
-    @unknown default:
-      break
     }
   }
 
   func topUpQueue() {
-    while player.items().count < maxQueuedItems {
+    while player.items().count < Self.maxQueuedItems {
       let nextIndex = lastQueuedIndex + 1
       guard tracks.indices.contains(nextIndex) else { break }
       lastQueuedIndex = nextIndex
@@ -241,50 +199,16 @@ private extension AudioPlayer {
     applyEQToUpcoming()
   }
 
-  var maxQueuedItems: Int {
-    isAirPlayRouteActive && tracks.contains { $0.contentURLPath?.starts(with: "/hls") == true }
-      ? 1 : Self.normalMaxQueuedItems
-  }
-
   func makeItem(at index: Int) -> AVPlayerItem? {
     guard index < tracks.count, let url = url(for: tracks[index]) else { return nil }
-    let source: String
-    if url.isFileURL {
-      source = "file"
-    } else if url.path.contains("/public/session/") {
-      source = "publicSession"
-    } else if tracks[index].contentURLPath?.starts(with: "/hls") == true {
-      source = "hls"
-    } else {
-      source = "remote"
-    }
-    let itemMessage = "Preparing player item: source=\(source) ext=\(url.pathExtension)"
-    AppLogger.player.info("\(itemMessage)")
-    PlaybackDebugLog.write(itemMessage)
-    let item = AVPlayerItem(
+    return AVPlayerItem(
       url: url,
-      headers: assetHeaders(for: url)
+      headers: Audiobookshelf.shared.authentication.server?.customHeaders
     )
-    if tracks[index].contentURLPath?.starts(with: "/hls") == true {
-      item.preferredForwardBufferDuration = 50
-    }
-    return item
   }
 
   func url(for track: Track) -> URL? {
     session.url(for: track)
-  }
-
-  func assetHeaders(for url: URL) -> [String: String]? {
-    guard !url.isFileURL, !url.path.contains("/public/session/") else { return nil }
-    guard let server = Audiobookshelf.shared.authentication.server else { return nil }
-    var headers = server.customHeaders
-    headers["Authorization"] = server.token.bearer
-    return headers
-  }
-
-  var isAirPlayRouteActive: Bool {
-    AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .airPlay }
   }
 
   func applyEQToUpcoming() {
@@ -321,7 +245,6 @@ private extension AudioPlayer {
       .removeDuplicates()
       .sink { [weak self] status in
         guard let self else { return }
-        PlaybackDebugLog.write("Player timeControlStatus: \(status.debugName)")
         switch status {
         case .paused:
           self.events.send(.stateChanged(.paused))
@@ -343,11 +266,7 @@ private extension AudioPlayer {
   }
 
   func handleCurrentItemChange(_ item: AVPlayerItem?) {
-    guard let item else {
-      PlaybackDebugLog.write("Player currentItem: nil")
-      return
-    }
-    PlaybackDebugLog.write("Player currentItem changed: status=\(item.status.debugName)")
+    guard let item else { return }
     AppLogger.player.debug("Now playing track \(self.currentTrackIndex)/\(self.tracks.count)")
     observeItem(item)
     topUpQueue()
@@ -364,12 +283,7 @@ private extension AudioPlayer {
         case .readyToPlay:
           self.events.send(.stateChanged(.ready))
         case .failed:
-          let nsError = item.error as NSError?
-          let underlying = nsError?.userInfo[NSUnderlyingErrorKey] as? NSError
-          let message =
-            "Player item failed: error=\(nsError?.domain ?? "nil")/\(nsError?.code ?? 0) underlying=\(underlying?.domain ?? "nil")/\(underlying?.code ?? 0)"
-          AppLogger.player.error("\(message)")
-          PlaybackDebugLog.write(message)
+          AppLogger.player.error("Player item failed: \(item.error?.localizedDescription ?? "Unknown")")
           self.events.send(.error(item.error))
         default:
           break
@@ -399,13 +313,8 @@ private extension AudioPlayer {
     NotificationCenter.default.publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item)
       .sink { [weak self] notification in
         let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-        let nsError = error as NSError?
-        let underlying = nsError?.userInfo[NSUnderlyingErrorKey] as? NSError
-        let message =
-          "Failed to play to end: error=\(nsError?.domain ?? "nil")/\(nsError?.code ?? 0) underlying=\(underlying?.domain ?? "nil")/\(underlying?.code ?? 0)"
-        AppLogger.player.error("\(message)")
-        PlaybackDebugLog.write(message)
-        self?.events.send(.error(error))
+        AppLogger.player.error("Failed to play to end: \(error?.localizedDescription ?? "Unknown")")
+        self?.events.send(.stalled)
       }
       .store(in: &itemObservers)
 
@@ -437,28 +346,6 @@ private extension AudioPlayer {
 private extension AVPlayer {
   var currentSeconds: TimeInterval {
     currentTime().seconds.isNaN ? 0 : currentTime().seconds
-  }
-}
-
-private extension AVPlayer.TimeControlStatus {
-  var debugName: String {
-    switch self {
-    case .paused: "paused"
-    case .waitingToPlayAtSpecifiedRate: "waiting"
-    case .playing: "playing"
-    @unknown default: "unknown"
-    }
-  }
-}
-
-private extension AVPlayerItem.Status {
-  var debugName: String {
-    switch self {
-    case .unknown: "unknown"
-    case .readyToPlay: "readyToPlay"
-    case .failed: "failed"
-    @unknown default: "unknown"
-    }
   }
 }
 

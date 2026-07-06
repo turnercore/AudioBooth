@@ -57,8 +57,6 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>AVInitialRouteSharingPolicy</key>
-	<string>LongFormAudio</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>AudioBooth uses notifications for alarm alerts.</string>
 	<key>UIApplicationSceneManifest</key>
