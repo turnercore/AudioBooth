@@ -16,7 +16,10 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Do not persist auth tokens or custom secret headers in plaintext storage unless an existing platform constraint forces it and the risk is documented.
 - Keep expensive filesystem and SwiftData work off the main actor where possible.
 - Do not commit `AudioBooth/Local.xcconfig`.
-- Be careful with entitlements: personal-branch signing changes are allowed, but do not assume they are appropriate for upstream main.
+- Preserve the personal app identifiers, `group.com.turnercore.audioBS` app-group setup, and intentionally absent CarPlay entitlement unless the user explicitly requests a signing or capability change.
+- In-app purchases and the Tip Jar are intentionally removed from `personal-main`. Do not restore StoreKit configuration, RevenueCat dependencies or startup code, Tip Jar views/models, or settings links when resolving upstream merges.
+- Treat personal AirPlay and playback-route behavior as an intentional merge-sensitive delta. Review `PlayerManager`, `BookPlayerModel`, `SessionManager`, and the personal-only commit history before accepting upstream playback changes.
+- Personal-branch signing and product changes are not assumed to be appropriate for upstream main.
 
 ## Work Guidance
 
@@ -32,4 +35,3 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Test watch/widget behavior when changing watch connectivity, app groups, timelines, or shared defaults.
 
 ## Child DOX Index
-

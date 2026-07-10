@@ -14,7 +14,6 @@ final class KeepOfflineManager {
   private let downloadManager = DownloadManager.shared
   private var cancellables = Set<AnyCancellable>()
   private var isReconciling = false
-  private var needsAnotherPass = false
 
   private init() {
     PlayerManager.shared.$current
@@ -27,42 +26,67 @@ final class KeepOfflineManager {
   }
 
   func reconcile() {
-    guard Audiobookshelf.shared.authentication.isAuthenticated else { return }
-    guard preferences.keepOfflineMode != .off else { return }
-    guard isNetworkAllowed else { return }
-    guard Audiobookshelf.shared.authentication.server?.permissions?.download == true else { return }
-    guard let current = PlayerManager.shared.current else { return }
+    guard Audiobookshelf.shared.authentication.isAuthenticated, !isReconciling else { return }
 
-    guard !isReconciling else {
-      needsAnotherPass = true
+    guard isNetworkAllowed else {
+      AppLogger.download.debug("Keep offline skipped: disabled or network not allowed")
+      return
+    }
+
+    guard Audiobookshelf.shared.authentication.server?.permissions?.download == true else {
+      AppLogger.download.debug("Keep offline skipped: no download permission")
+      return
+    }
+
+    guard let current = PlayerManager.shared.current else {
+      AppLogger.download.debug("Keep offline skipped: nothing playing")
+      return
+    }
+
+    guard current.downloadState == .downloaded else {
+      AppLogger.download.debug("Keep offline skipped: current item not downloaded")
       return
     }
 
     isReconciling = true
 
     Task {
-      let count = preferences.keepOfflineCount
-
       if let podcastID = current.podcastID {
-        await reconcilePodcast(id: podcastID, count: count)
+        await reconcilePodcast(id: podcastID, episodeID: current.id)
       } else {
-        await reconcileSeries(bookID: current.id, count: count)
+        await reconcileSeries(bookID: current.id)
       }
 
       isReconciling = false
-
-      if needsAnotherPass {
-        needsAnotherPass = false
-        reconcile()
-      }
     }
   }
 
-  private func reconcileSeries(bookID: String, count: Int) async {
-    do {
-      let book = try await Audiobookshelf.shared.books.fetch(id: bookID)
-      guard let seriesID = book.series?.first?.id else { return }
+  private func reconcileSeries(bookID: String) async {
+    let count = preferences.keepOfflineCount
 
+    guard let localBooks = try? LocalBook.fetchAll() else { return }
+
+    guard let currentBook = localBooks.first(where: { $0.bookID == bookID }),
+      let seriesID = currentBook.series.first?.id
+    else {
+      AppLogger.download.debug("Keep offline skipped: current book has no series")
+      return
+    }
+
+    let unlistened = localBooks.count { book in
+      book.bookID != bookID
+        && book.series.contains { $0.id == seriesID }
+        && MediaProgress.progress(for: book.bookID) < 1.0
+    }
+
+    guard unlistened < count else {
+      AppLogger.download.debug("Keep offline satisfied for series \(seriesID)")
+      return
+    }
+
+    AppLogger.download.info("Keep offline reconciling series \(seriesID)")
+
+    do {
       let filter = "series.\(Data(seriesID.utf8).base64EncodedString())"
       var books: [Book] = []
       var page = 0
@@ -72,7 +96,7 @@ final class KeepOfflineManager {
           limit: 100,
           page: page,
           filter: filter,
-          libraryID: book.libraryID
+          libraryID: currentBook.libraryID
         )
         books.append(contentsOf: response.results)
 
@@ -80,12 +104,12 @@ final class KeepOfflineManager {
         if (page * 100) >= response.total { break }
       }
 
-      for book in books where MediaProgress.progress(for: book.id) >= 1.0 {
-        removeBookDownload(book.id)
+      guard let index = books.firstIndex(where: { $0.id == bookID }) else {
+        AppLogger.download.debug("Keep offline skipped: current book not in series \(seriesID)")
+        return
       }
 
-      let window =
-        books
+      let window = books[(index + 1)...]
         .filter { MediaProgress.progress(for: $0.id) < 1.0 }
         .prefix(count)
 
@@ -93,11 +117,28 @@ final class KeepOfflineManager {
         await downloadBook(book)
       }
     } catch {
-      AppLogger.download.error("Keep offline reconcile failed for book \(bookID): \(error)")
+      AppLogger.download.error("Keep offline reconcile failed for series \(seriesID): \(error)")
     }
   }
 
-  private func reconcilePodcast(id: String, count: Int) async {
+  private func reconcilePodcast(id: String, episodeID: String) async {
+    let count = preferences.keepOfflineCount
+
+    guard let localEpisodes = try? LocalEpisode.fetchAll() else { return }
+
+    let unlistened = localEpisodes.count { episode in
+      episode.episodeID != episodeID
+        && episode.podcast?.podcastID == id
+        && MediaProgress.progress(for: episode.episodeID) < 1.0
+    }
+
+    guard unlistened < count else {
+      AppLogger.download.debug("Keep offline satisfied for podcast \(id)")
+      return
+    }
+
+    AppLogger.download.info("Keep offline reconciling podcast \(id)")
+
     do {
       let podcast = try await Audiobookshelf.shared.podcasts.fetch(id: id)
       let sort = preferences.podcastEpisodeSort
@@ -105,12 +146,12 @@ final class KeepOfflineManager {
       let episodes = (podcast.media.episodes ?? [])
         .sorted { sort.areInOrder($0, $1, ascending: ascending) }
 
-      for episode in episodes where MediaProgress.progress(for: episode.id) >= 1.0 {
-        removeEpisodeDownload(episode.id, podcastID: podcast.id)
+      guard let index = episodes.firstIndex(where: { $0.id == episodeID }) else {
+        AppLogger.download.debug("Keep offline skipped: current episode not in podcast \(id)")
+        return
       }
 
-      let window =
-        episodes
+      let window = episodes[(index + 1)...]
         .filter { MediaProgress.progress(for: $0.id) < 1.0 }
         .prefix(count)
 
@@ -123,8 +164,6 @@ final class KeepOfflineManager {
   }
 
   private func downloadBook(_ book: Book) async {
-    guard downloadManager.downloadStates[book.id] != .downloaded else { return }
-    guard !downloadManager.isDownloading(for: book.id) else { return }
     guard await StorageManager.shared.canDownload(additionalBytes: book.size ?? 0) else { return }
 
     downloadManager.startDownload(
@@ -141,8 +180,6 @@ final class KeepOfflineManager {
   }
 
   private func downloadEpisode(_ episode: PodcastEpisode, podcast: Podcast) async {
-    guard downloadManager.downloadStates[episode.id] != .downloaded else { return }
-    guard !downloadManager.isDownloading(for: episode.id) else { return }
     guard await StorageManager.shared.canDownload(additionalBytes: episode.size ?? 0) else { return }
 
     downloadManager.startDownload(
@@ -156,18 +193,6 @@ final class KeepOfflineManager {
         startedAt: Date()
       )
     )
-  }
-
-  private func removeBookDownload(_ bookID: String) {
-    guard bookID != PlayerManager.shared.current?.id else { return }
-    guard downloadManager.downloadStates[bookID] == .downloaded else { return }
-    downloadManager.deleteDownload(for: bookID)
-  }
-
-  private func removeEpisodeDownload(_ episodeID: String, podcastID: String) {
-    guard episodeID != PlayerManager.shared.current?.id else { return }
-    guard downloadManager.downloadStates[episodeID] == .downloaded else { return }
-    downloadManager.deleteEpisodeDownload(episodeID: episodeID, podcastID: podcastID)
   }
 
   private var isNetworkAllowed: Bool {

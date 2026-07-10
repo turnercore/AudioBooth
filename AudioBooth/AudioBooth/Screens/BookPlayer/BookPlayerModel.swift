@@ -800,6 +800,8 @@ extension BookPlayerModel {
     player.volume = Float(userPreferences.volumeLevel)
 
     if pendingPlay {
+      configureAudioSession()
+      try? audioSession.setActive(true)
       player.resume()
       pendingPlay = false
     }
@@ -1039,6 +1041,12 @@ extension BookPlayerModel {
       interruptionBeganAt = isPlaying ? Date() : nil
 
     case .ended:
+      guard sessionManager.current != nil else {
+        AppLogger.player.info("Audio interruption ended - not resuming (no active session)")
+        interruptionBeganAt = nil
+        return
+      }
+
       applySmartRewind(reason: .onInterruption)
 
       if interruptionBeganAt != nil,
@@ -1046,6 +1054,7 @@ extension BookPlayerModel {
         AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume)
       {
         AppLogger.player.info("Audio interruption ended - resuming playback")
+        interruptionBeganAt = nil
         try? audioSession.setActive(true)
         player?.resume()
       } else if let beganAt = interruptionBeganAt,
@@ -1053,6 +1062,7 @@ extension BookPlayerModel {
         !audioSession.secondaryAudioShouldBeSilencedHint
       {
         AppLogger.player.info("Audio interruption ended - resuming playback (within 5 minutes)")
+        interruptionBeganAt = nil
         try? audioSession.setActive(true)
         player?.resume()
       } else {
@@ -1078,8 +1088,8 @@ extension BookPlayerModel {
       AppLogger.player.info("Audio route changed (old device unavailable) - pausing")
       player?.pause()
 
-    case .newDeviceAvailable, .override, .routeConfigurationChange, .categoryChange:
-      guard isPlaying else { return }
+    case .newDeviceAvailable, .override:
+      guard isPlaying, interruptionBeganAt == nil, sessionManager.current != nil else { return }
       AppLogger.player.info("Audio route changed (\(reason.rawValue)) - re-activating session")
       configureAudioSession()
       try? audioSession.setActive(true)
@@ -1117,7 +1127,7 @@ extension BookPlayerModel {
       interruptionBeganAt = isPlaying ? Date() : nil
       player?.pause()
     } else if new > 0 && old == 0, let beganAt = interruptionBeganAt {
-      if Date().timeIntervalSince(beganAt) < 60 * 5 {
+      if Date().timeIntervalSince(beganAt) < 60 * 5, sessionManager.current != nil {
         AppLogger.player.info("Volume restored from 0 - resuming playback")
         applySmartRewind(reason: .onInterruption)
         player?.resume()
@@ -1131,6 +1141,12 @@ extension BookPlayerModel {
   private func updateMediaProgress() {
     Task { @MainActor in
       do {
+        if isPlaying, sessionManager.current == nil {
+          AppLogger.player.warning("Playback active with no session - recreating session")
+          Task { try? await setupSession(forceTranscode: false) }
+          return
+        }
+
         if isPlaying, let lastTime = lastPlaybackAt {
           let timeListened = Date().timeIntervalSince(lastTime)
           sessionManager.current?.pendingListeningTime += timeListened
