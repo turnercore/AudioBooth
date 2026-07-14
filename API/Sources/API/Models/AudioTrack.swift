@@ -14,6 +14,7 @@ public struct AudioTrack: Codable, Sendable {
   public let channelLayout: String?
   public let mimeType: String?
   public let ino: String?
+  public let contentUrl: String?
 
   public struct Metadata: Codable, Sendable {
     public let filename: String?

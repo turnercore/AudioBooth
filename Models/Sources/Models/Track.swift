@@ -21,6 +21,7 @@ public final class Track {
   public var mimeType: String?
 
   public var relativePath: URL?
+  @Transient public var contentURLPath: String?
 
   public init(
     index: Int,
@@ -37,7 +38,8 @@ public final class Track {
     channels: Int? = nil,
     channelLayout: String? = nil,
     mimeType: String? = nil,
-    relativePath: URL? = nil
+    relativePath: URL? = nil,
+    contentURLPath: String? = nil
   ) {
     self.index = index
     self.startOffset = startOffset
@@ -54,6 +56,7 @@ public final class Track {
     self.channelLayout = channelLayout
     self.mimeType = mimeType
     self.relativePath = relativePath
+    self.contentURLPath = contentURLPath
   }
 
   public var localPath: URL? {

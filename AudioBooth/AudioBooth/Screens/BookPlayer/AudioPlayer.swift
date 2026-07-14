@@ -24,7 +24,7 @@ final class AudioPlayer {
     case rateChanged(Float)
     case finished
     case stalled
-    case error(Error?)
+    case error(Error?, shouldResume: Bool)
   }
 
   private let player = AVQueuePlayer()
@@ -36,6 +36,8 @@ final class AudioPlayer {
   private(set) var currentTrackIndex: Int = 0
   private var lastQueuedIndex: Int = -1
   private var timeObserver: Any?
+  private var playbackRequested = false
+  private var requiresQueueReload = false
   private var cancellables = Set<AnyCancellable>()
   private var itemObservers = Set<AnyCancellable>()
 
@@ -74,8 +76,8 @@ final class AudioPlayer {
   init(mediaProgress: MediaProgress, session: PlaybackSession) {
     self.mediaProgress = mediaProgress
     self.session = session
-    player.allowsExternalPlayback = false
-    player.automaticallyWaitsToMinimizeStalling = false
+    player.allowsExternalPlayback = true
+    player.automaticallyWaitsToMinimizeStalling = true
     setupObservers()
   }
 
@@ -101,12 +103,14 @@ final class AudioPlayer {
   }
 
   func pause() {
+    playbackRequested = false
     player.pause()
   }
 
   func resume() {
+    playbackRequested = true
     guard !tracks.isEmpty else {
-      events.send(.error(nil))
+      events.send(.error(nil, shouldResume: true))
       return
     }
 
@@ -115,7 +119,7 @@ final class AudioPlayer {
       return
     }
 
-    if player.currentItem == nil || player.currentItem?.status == .failed {
+    if player.currentItem == nil || player.currentItem?.status == .failed || requiresQueueReload {
       let (trackIndex, offset) = trackAndOffset(for: mediaProgress.currentTime)
       currentTrackIndex = trackIndex
       loadQueue(from: trackIndex, seekTo: offset, autoPlay: true)
@@ -127,6 +131,8 @@ final class AudioPlayer {
 
   func stop() {
     removeTimeObserver()
+    playbackRequested = false
+    requiresQueueReload = false
     player.pause()
     player.removeAllItems()
     events.send(.stateChanged(.stopped))
@@ -170,9 +176,17 @@ final class AudioPlayer {
 private extension AudioPlayer {
   static let maxQueuedItems = 3
 
+  enum SourceKind: String {
+    case file
+    case publicSession
+    case hls
+    case remote
+  }
+
   func loadQueue(from index: Int, seekTo offset: TimeInterval, autoPlay: Bool) {
     guard tracks.indices.contains(index) else { return }
 
+    requiresQueueReload = false
     player.removeAllItems()
     currentTrackIndex = index
     lastQueuedIndex = index - 1
@@ -188,6 +202,7 @@ private extension AudioPlayer {
     }
 
     if autoPlay {
+      playbackRequested = true
       player.play()
       player.rate = player.defaultRate
     }
@@ -206,14 +221,52 @@ private extension AudioPlayer {
 
   func makeItem(at index: Int) -> AVPlayerItem? {
     guard index < tracks.count, let url = url(for: tracks[index]) else { return nil }
-    return AVPlayerItem(
-      url: url,
-      headers: Audiobookshelf.shared.authentication.server?.customHeaders
+    let track = tracks[index]
+    let source = sourceKind(for: url)
+    let headers = assetHeaders(for: url, source: source)
+    let item = AVPlayerItem(url: url, headers: headers)
+    if source == .hls {
+      item.preferredForwardBufferDuration = 50
+    }
+    AppLogger.player.info(
+      "Preparing player item: source=\(source.rawValue) scheme=\(url.scheme ?? "none") ext=\(url.pathExtension) mime=\(track.mimeType ?? "none") codec=\(track.codec ?? "none") format=\(track.format ?? "none") channels=\(track.channels ?? 0) duration=\(track.duration) headers=\(headers?.count ?? 0) authorization=\(headers?["Authorization"] != nil) eq=\(eqEnabled) externalPlayback=\(player.allowsExternalPlayback) waitForStalls=\(player.automaticallyWaitsToMinimizeStalling)"
     )
+    return item
   }
 
   func url(for track: Track) -> URL? {
     session.url(for: track)
+  }
+
+  func sourceKind(for url: URL) -> SourceKind {
+    if url.isFileURL { return .file }
+    if url.path == "/hls" || url.path.hasPrefix("/hls/") { return .hls }
+    if url.path.contains("/public/session/") { return .publicSession }
+    return .remote
+  }
+
+  func assetHeaders(for url: URL, source: SourceKind) -> [String: String]? {
+    guard source != .file,
+      let server = Audiobookshelf.shared.authentication.server,
+      let serverURL = Audiobookshelf.shared.authentication.serverURL,
+      isSameOrigin(url, serverURL)
+    else { return nil }
+
+    var headers = server.customHeaders
+    if source == .hls {
+      headers["Authorization"] = server.token.bearer
+    }
+    return headers.isEmpty ? nil : headers
+  }
+
+  func isSameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+    func effectivePort(_ url: URL) -> Int? {
+      url.port ?? (url.scheme?.lowercased() == "https" ? 443 : url.scheme?.lowercased() == "http" ? 80 : nil)
+    }
+
+    return lhs.scheme?.lowercased() == rhs.scheme?.lowercased()
+      && lhs.host?.lowercased() == rhs.host?.lowercased()
+      && effectivePort(lhs) == effectivePort(rhs)
   }
 
   func applyEQToUpcoming() {
@@ -288,8 +341,9 @@ private extension AudioPlayer {
         case .readyToPlay:
           self.events.send(.stateChanged(.ready))
         case .failed:
-          AppLogger.player.error("Player item failed: \(item.error?.localizedDescription ?? "Unknown")")
-          self.events.send(.error(item.error))
+          self.requiresQueueReload = true
+          self.logTerminalFailure("itemFailed", item: item, error: item.error)
+          self.events.send(.error(item.error, shouldResume: self.playbackRequested))
         default:
           break
         }
@@ -317,18 +371,45 @@ private extension AudioPlayer {
 
     NotificationCenter.default.publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification, object: item)
       .sink { [weak self] notification in
+        guard let self else { return }
         let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-        AppLogger.player.error("Failed to play to end: \(error?.localizedDescription ?? "Unknown")")
-        self?.events.send(.stalled)
+        self.requiresQueueReload = true
+        self.logTerminalFailure("failedToEnd", item: item, error: error)
+        self.events.send(.error(error, shouldResume: self.playbackRequested))
       }
       .store(in: &itemObservers)
 
     NotificationCenter.default.publisher(for: AVPlayerItem.newErrorLogEntryNotification, object: item)
       .sink { _ in
         guard let entry = item.errorLog()?.events.last else { return }
-        AppLogger.player.error("Player error log: \(entry.errorStatusCode) - \(entry.errorComment ?? "")")
+        AppLogger.player.error(
+          "Player error log: domain=\(entry.errorDomain) code=\(entry.errorStatusCode)"
+        )
       }
       .store(in: &itemObservers)
+  }
+
+  func logTerminalFailure(_ event: String, item: AVPlayerItem, error: Error?) {
+    let errorLog = item.errorLog()?.events.last
+    let accessLog = item.accessLog()?.events.last
+    let route = AVAudioSession.sharedInstance().currentRoute.outputs
+      .map { $0.portType.rawValue }
+      .joined(separator: ",")
+    AppLogger.player.error(
+      "Terminal playback failure: event=\(event) errors=\(errorChain(error)) itemStatus=\(item.status.rawValue) timeControl=\(player.timeControlStatus.rawValue) waiting=\(String(describing: player.reasonForWaitingToPlay)) bufferEmpty=\(item.isPlaybackBufferEmpty) bufferLikely=\(item.isPlaybackLikelyToKeepUp) bufferFull=\(item.isPlaybackBufferFull) route=\(route) externalActive=\(player.isExternalPlaybackActive) errorLogDomain=\(errorLog?.errorDomain ?? "none") errorLogCode=\(errorLog?.errorStatusCode ?? 0) observedBitrate=\(accessLog?.observedBitrate ?? 0) indicatedBitrate=\(accessLog?.indicatedBitrate ?? 0) transferDuration=\(accessLog?.transferDuration ?? 0) playbackOffset=\(accessLog?.playbackStartOffset ?? 0) addressChanges=\(accessLog?.numberOfServerAddressChanges ?? 0)"
+    )
+  }
+
+  func errorChain(_ error: Error?) -> String {
+    var values: [String] = []
+    var current = error as NSError?
+    var depth = 0
+    while let value = current, depth < 5 {
+      values.append("\(value.domain)/\(value.code)")
+      current = value.userInfo[NSUnderlyingErrorKey] as? NSError
+      depth += 1
+    }
+    return values.isEmpty ? "none" : values.joined(separator: "<-")
   }
 
   func addTimeObserver() {

@@ -19,6 +19,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Preserve the personal app identifiers, `group.com.turnercore.audioBS` app-group setup, and intentionally absent CarPlay entitlement unless the user explicitly requests a signing or capability change.
 - In-app purchases and the Tip Jar are intentionally removed from `personal-main`. Do not restore StoreKit configuration, RevenueCat dependencies or startup code, Tip Jar views/models, or settings links when resolving upstream merges.
 - Treat personal AirPlay and playback-route behavior as an intentional merge-sensitive delta. Review `PlayerManager`, `BookPlayerModel`, `SessionManager`, and the personal-only commit history before accepting upstream playback changes.
+- Treat `AVPlayerItem.failedToPlayToEndTimeNotification` as terminal for that item: preserve play intent, rebuild the queue/session, and keep playback diagnostics free of URLs, session IDs, headers, and tokens.
 - Personal-branch signing and product changes are not assumed to be appropriate for upstream main.
 
 ## Work Guidance

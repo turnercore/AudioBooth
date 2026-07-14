@@ -17,6 +17,7 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 - Save/delete helpers that declare `throws` should surface `context.save()` failures instead of swallowing them.
 - Do not import `API` or add remote DTO mapping here; keep DTO-to-local mapping in app-side adapter code.
 - Keep model properties local-domain focused; avoid exposing remote API enum types from local SwiftData models.
+- Keep play-session source URLs transient. Resolve server-provided HLS references onto the authenticated session origin and reject absolute or non-HLS overrides.
 
 ## Work Guidance
 

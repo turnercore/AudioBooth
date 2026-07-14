@@ -17,6 +17,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - Keep network request construction centralized in `NetworkService` unless a platform API requires a different transport.
 - Avoid adding UI dependencies to `API`; UI files that use `LazyImage` should import `NukeUI` explicitly.
 - Keep DTO-to-local model mapping in app-side adapter code; do not reintroduce a `Models -> API` dependency.
+- Preserve server-provided play-session source hints such as `AudioTrack.contentUrl`; treat their values as sensitive playback credentials when logging.
 
 ## Work Guidance
 
