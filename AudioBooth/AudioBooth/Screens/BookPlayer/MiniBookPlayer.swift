@@ -66,6 +66,9 @@ struct MiniBookPlayer: View, Equatable {
   private var buttons: some View {
     if placement != .inline {
       HStack(spacing: 8) {
+        AirPlayButton(tintColor: .secondaryLabel)
+          .frame(width: 24, height: 24)
+
         Button(action: {
           Haptics.impact(.medium)
           player.onTogglePlaybackTapped()
@@ -146,6 +149,9 @@ struct LegacyMiniBookPlayer: View {
       Spacer()
 
       HStack(spacing: 12) {
+        AirPlayButton(tintColor: .secondaryLabel)
+          .frame(width: 28, height: 28)
+
         Button(action: {
           Haptics.impact(.medium)
           player.onTogglePlaybackTapped()

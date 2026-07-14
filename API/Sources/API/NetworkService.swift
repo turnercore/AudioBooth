@@ -195,7 +195,7 @@ final class NetworkService {
       guard 200...299 ~= httpResponse.statusCode else {
         let responseBody = String(data: data, encoding: .utf8) ?? "Unable to decode response body"
         AppLogger.network.error(
-          "HTTP \(httpResponse.statusCode) error. Response body: \(responseBody)"
+          "HTTP \(httpResponse.statusCode) error. Response body bytes: \(data.count)"
         )
 
         if httpResponse.statusCode == 401, let server, server.canAttemptRefresh {

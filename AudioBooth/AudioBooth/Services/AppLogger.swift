@@ -25,7 +25,10 @@ enum AppLogger {
       stream.logLevel = .debug
       persistent.logLevel = .debug
 
-      return MultiplexLogHandler([stream, RedactingLogHandler(wrapped: persistent)])
+      return MultiplexLogHandler([
+        RedactingLogHandler(wrapped: stream),
+        RedactingLogHandler(wrapped: persistent),
+      ])
     }
 
     general.info("Version \(UIApplication.appVersion)")
@@ -71,8 +74,8 @@ extension LoggerStore.Event {
   }
 }
 
-struct RedactingLogHandler: LogHandler {
-  var wrapped: PersistentLogHandler
+struct RedactingLogHandler<Wrapped: LogHandler>: LogHandler {
+  var wrapped: Wrapped
 
   var metadata: Logger.Metadata {
     get { wrapped.metadata }
@@ -89,36 +92,31 @@ struct RedactingLogHandler: LogHandler {
     set { wrapped[metadataKey: key] = newValue }
   }
 
-  func log(
-    level: Logger.Level,
-    message: Logger.Message,
-    metadata: Logger.Metadata?,
-    source: String,
-    file: String,
-    function: String,
-    line: UInt
-  ) {
-    let redacted = Logger.Message(stringLiteral: message.description.redactingURLs)
-    wrapped.log(
-      level: level,
-      message: redacted,
-      metadata: metadata,
-      file: file,
-      function: function,
-      line: line
-    )
-  }
-
   func log(event: LogEvent) {
-    let redacted = Logger.Message(stringLiteral: event.message.description.redactingURLs)
-    wrapped.log(
-      level: event.level,
-      message: redacted,
-      metadata: event.metadata,
-      file: event.file,
-      function: event.function,
-      line: event.line
-    )
+    var event = event
+    event.message = Logger.Message(stringLiteral: event.message.description.redactingLogSecrets)
+    wrapped.log(event: event)
+  }
+}
+
+private extension String {
+  var redactingLogSecrets: String {
+    var value = redactingURLs
+    let patterns = [
+      #"(?i)(authorization|cookie|x-refresh-token|token|accessToken|refreshToken|code|code_verifier|code_challenge|state)=([^&\s,]+)"#,
+      #"(?i)(authorization|cookie|x-refresh-token|token|accessToken|refreshToken|code|code_verifier|code_challenge|state):\s*([^,\s]+)"#,
+    ]
+
+    for pattern in patterns {
+      guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+      let range = NSRange(value.startIndex..<value.endIndex, in: value)
+      value = regex.stringByReplacingMatches(
+        in: value,
+        range: range,
+        withTemplate: "$1=<redacted>"
+      )
+    }
+    return value
   }
 }
 

@@ -12,7 +12,6 @@ final class SettingsViewModel: SettingsView.Model {
     UserDefaults.standard.set(true, forKey: "pulse-disable-settings-prompts")
 
     super.init(
-      tipJar: TipJarViewModel(),
       playbackSessionList: PlaybackSessionListViewModel(),
       storagePreferences: StoragePreferencesViewModel()
     )

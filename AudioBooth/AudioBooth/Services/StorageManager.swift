@@ -13,7 +13,7 @@ final class StorageManager {
   func getDownloadedContentSize() async -> Int64 {
     guard
       let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else {
       return 0
@@ -68,45 +68,51 @@ final class StorageManager {
     return (currentUsage + additionalBytes) < maxBytes
   }
 
-  @MainActor
   func cleanupUnusedDownloads() async {
-    let setting = UserPreferences.shared.removeAfterUnused
+    let setting = await MainActor.run { UserPreferences.shared.removeAfterUnused }
     guard setting != .never else { return }
 
     let days = setting.rawValue
     let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-    let currentlyPlaying = PlayerManager.shared.current?.id
+    let currentlyPlaying = await MainActor.run { PlayerManager.shared.current?.id }
 
     AppLogger.download.info("Cleaning up downloads unused since \(cutoffDate)")
 
-    let servers = Audiobookshelf.shared.authentication.servers
+    let staleBookIDs = await MainActor.run {
+      let servers = Audiobookshelf.shared.authentication.servers
+      var result: [String] = []
 
-    for server in servers.values {
-      do {
-        let context = try ModelContextProvider.shared.context(for: server.id)
+      for server in servers.values {
+        do {
+          let context = try ModelContextProvider.shared.context(for: server.id)
 
-        let bookDescriptor = FetchDescriptor<LocalBook>()
-        let allBooks = try context.fetch(bookDescriptor)
-        let downloadedBooks = allBooks.filter { $0.isDownloaded || $0.mediaType.contains(.ebook) }
+          let bookDescriptor = FetchDescriptor<LocalBook>()
+          let allBooks = try context.fetch(bookDescriptor)
+          let downloadedBooks = allBooks.filter { $0.isDownloaded || $0.mediaType.contains(.ebook) }
+          let progressByBookID = (try context.fetch(FetchDescriptor<MediaProgress>()))
+            .reduce(into: [String: MediaProgress]()) { result, progress in
+              result[progress.bookID] = progress
+            }
 
-        for book in downloadedBooks {
-          if book.bookID == currentlyPlaying { continue }
+          for book in downloadedBooks {
+            if book.bookID == currentlyPlaying { continue }
 
-          let bookID = book.bookID
-          let progressPredicate = #Predicate<MediaProgress> { $0.bookID == bookID }
-          let progressDescriptor = FetchDescriptor<MediaProgress>(predicate: progressPredicate)
-          let progress = try? context.fetch(progressDescriptor).first
+            let lastUsed = progressByBookID[book.bookID]?.lastPlayedAt ?? book.createdAt
 
-          let lastUsed = progress?.lastPlayedAt ?? book.createdAt
-
-          if lastUsed < cutoffDate {
-            AppLogger.download.info("Removing unused download: \(book.title) (last used: \(lastUsed))")
-            DownloadManager.shared.deleteDownload(for: book.bookID)
+            if lastUsed < cutoffDate {
+              AppLogger.download.info("Removing unused download: \(book.title) (last used: \(lastUsed))")
+              result.append(book.bookID)
+            }
           }
+        } catch {
+          AppLogger.download.error("Failed to cleanup downloads for server \(server.id): \(error)")
         }
-      } catch {
-        AppLogger.download.error("Failed to cleanup downloads for server \(server.id): \(error)")
       }
+      return result
+    }
+
+    for bookID in staleBookIDs {
+      DownloadManager.shared.deleteDownload(for: bookID)
     }
   }
 

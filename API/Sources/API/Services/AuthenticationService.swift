@@ -109,7 +109,7 @@ public final class AuthenticationService: ObservableObject {
   ) async throws -> String {
     AppLogger.authentication.info("loginWithOIDC called for server: \(serverURL)")
     AppLogger.authentication.debug(
-      "Request parameters - code length: \(code.count), verifier length: \(verifier.count), state: \(state ?? "nil"), cookies: \(cookies.count), custom headers: \(customHeaders.count)"
+      "Request parameters - code length: \(code.count), verifier length: \(verifier.count), state present: \(state != nil), cookies: \(cookies.count), custom headers: \(customHeaders.count)"
     )
 
     guard let baseURL = URL(string: serverURL) else {
@@ -138,7 +138,7 @@ public final class AuthenticationService: ObservableObject {
     AppLogger.authentication.debug(
       "Query parameters: \(query.keys.joined(separator: ", "))"
     )
-    AppLogger.authentication.debug("Cookie header: \(cookieString)")
+    AppLogger.authentication.debug("Cookie count: \(cookies.count)")
 
     let request = NetworkRequest<Authorize>(
       path: "/auth/openid/callback",

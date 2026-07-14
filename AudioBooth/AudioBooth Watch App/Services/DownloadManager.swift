@@ -274,22 +274,6 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
     super.cancel()
     currentTrack?.cancel()
     progressContinuation.finish()
-
-    cleanupPartialDownload()
-  }
-
-  private func cleanupPartialDownload() {
-    guard
-      let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        .first
-    else {
-      return
-    }
-
-    let bookDirectory = documentsPath.appendingPathComponent("audiobooks").appendingPathComponent(
-      bookID
-    )
-    try? FileManager.default.removeItem(at: bookDirectory)
   }
 
   private func executeDownload() async {
@@ -326,9 +310,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
       guard !isCancelled else { throw CancellationError() }
 
       if let relativePath = book.tracks.first(where: { $0.index == track.index })?.relativePath,
-        FileManager.default.fileExists(
-          atPath: documentsPath.appendingPathComponent(relativePath).path
-        )
+        existingTrackIsUsable(at: documentsPath.appendingPathComponent(relativePath), expectedSize: track.size)
       {
         if let size = track.size {
           bytesDownloadedSoFar += size
@@ -353,7 +335,8 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
         }
         let downloadTask = downloadSession.downloadTask(with: request)
         downloadTask.taskDescription = "\(track.index)|\(fileExtension)"
-        downloadTask.countOfBytesClientExpectsToReceive = Int64(track.size ?? 500_000_000)
+        downloadTask.countOfBytesClientExpectsToReceive =
+          track.size.map { Int64($0) } ?? NSURLSessionTransferSizeUnknown
 
         self.currentTrack = downloadTask
         self.continuation = continuation
@@ -365,6 +348,18 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
         bytesDownloadedSoFar += size
       }
     }
+  }
+
+  private func existingTrackIsUsable(at url: URL, expectedSize: Int64?) -> Bool {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      return false
+    }
+    guard let expectedSize else {
+      return true
+    }
+
+    let actualSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+    return actualSize == expectedSize
   }
 
   private func finish(success: Bool, error: Error?) {
@@ -410,10 +405,30 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
       at: destination.deletingLastPathComponent(),
       withIntermediateDirectories: true
     )
-    if FileManager.default.fileExists(atPath: destination.path) {
-      try FileManager.default.removeItem(at: destination)
+    if let expectedSize = book.tracks.first(where: { $0.index == trackIndex })?.size {
+      let actualSize = (try? FileManager.default.attributesOfItem(atPath: location.path)[.size] as? Int64) ?? 0
+      guard actualSize == Int64(expectedSize) else {
+        throw URLError(
+          .badServerResponse,
+          userInfo: [
+            NSLocalizedDescriptionKey:
+              "Downloaded file size mismatch: expected \(expectedSize), got \(actualSize)"
+          ]
+        )
+      }
     }
-    try FileManager.default.moveItem(at: location, to: destination)
+
+    let staging =
+      destination
+      .deletingLastPathComponent()
+      .appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
+    try FileManager.default.moveItem(at: location, to: staging)
+
+    if FileManager.default.fileExists(atPath: destination.path) {
+      _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
+    } else {
+      try FileManager.default.moveItem(at: staging, to: destination)
+    }
 
     if let trackArrayIndex = book.tracks.firstIndex(where: { $0.index == trackIndex }) {
       book.tracks[trackArrayIndex].relativePath = relativePath

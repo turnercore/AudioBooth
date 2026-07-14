@@ -5,7 +5,7 @@ final class SpeedPickerSheetViewModel: FloatPickerSheet.Model {
   private static let defaultPresets: [Double] = [0.7, 1.0, 1.2, 1.5, 1.7, 2.0]
   private static let presetsKey = "speedPresets"
 
-  private let sharedDefaults = UserDefaults(suiteName: "group.me.jgrenier.audioBS")
+  private let sharedDefaults = UserDefaults(suiteName: "group.com.turnercore.audioBS")
   private let mediaProgress: MediaProgress?
 
   let player: AudioPlayer

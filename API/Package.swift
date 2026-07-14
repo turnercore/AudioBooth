@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
   name: "API",
-  platforms: [.iOS(.v17), .watchOS(.v10)],
+  platforms: [.iOS(.v17), .macOS(.v14), .watchOS(.v10)],
   products: [
     .library(
       name: "API",
@@ -23,7 +23,7 @@ let package = Package(
       dependencies: [
         .product(name: "Logging", package: "swift-log"),
         .product(name: "SimpleKeychain", package: "SimpleKeychain"),
-        .product(name: "NukeUI", package: "Nuke"),
+        .product(name: "Nuke", package: "Nuke"),
         .product(name: "Pulse", package: "Pulse"),
       ],
     )

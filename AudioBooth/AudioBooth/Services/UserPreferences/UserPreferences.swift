@@ -196,7 +196,7 @@ final class UserPreferences: ObservableObject {
   var keepOfflineMode: AutoDownloadMode = .off
 
   @AppStorage("keepOfflineCount")
-  var keepOfflineCount: Int = 3
+  var keepOfflineCount: Int = 2
 
   @AppStorage("autoDownloadQueuedEpisodes")
   var autoDownloadQueuedEpisodes: Bool = false

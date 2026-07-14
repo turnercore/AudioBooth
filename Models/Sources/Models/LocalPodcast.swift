@@ -1,4 +1,3 @@
-import API
 @preconcurrency import Foundation
 import SwiftData
 
@@ -52,19 +51,6 @@ public final class LocalPodcast {
     self.podcastType = podcastType
   }
 
-  public convenience init(from podcast: Podcast) {
-    self.init(
-      podcastID: podcast.id,
-      title: podcast.title,
-      author: podcast.author,
-      coverURL: podcast.coverURL(),
-      podcastDescription: podcast.description,
-      genres: podcast.genres,
-      feedURL: podcast.feedURL,
-      language: podcast.language,
-      podcastType: podcast.podcastType
-    )
-  }
 }
 
 @MainActor
@@ -94,7 +80,7 @@ extension LocalPodcast {
       context.insert(self)
     }
 
-    try? context.save()
+    try context.save()
   }
 
 }

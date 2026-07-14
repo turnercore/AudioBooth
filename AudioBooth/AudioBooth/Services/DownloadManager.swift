@@ -10,7 +10,7 @@ import SwiftData
 final class DownloadManager: NSObject, ObservableObject {
   static let shared = DownloadManager()
 
-  static let appGroupIdentifier = "group.me.jgrenier.audioBS"
+  static let appGroupIdentifier = "group.com.turnercore.audioBS"
 
   static let backgroundSessionPrefix = "me.jgrenier.AudioBS.download."
 
@@ -301,6 +301,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
   private var continuation: CheckedContinuation<Void, Error>?
   private let continuationLock = NSLock()
   private var trackDestination: URL?
+  private var trackExpectedSize: Int64?
   private var lastResumeData: Data?
 
   private lazy var downloadSession: URLSession = {
@@ -361,32 +362,6 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
     super.cancel()
     currentTrack?.cancel()
     progressSubject.send(completion: .finished)
-
-    Task {
-      await cleanupPartialDownload()
-    }
-  }
-
-  private func cleanupPartialDownload() async {
-    guard let serverID = Audiobookshelf.shared.authentication.server?.id else { return }
-
-    switch type {
-    case .book:
-      if !audioStepCompleted {
-        try? FileManager.default.removeItem(at: DownloadManager.audiobookDirectory(serverID: serverID, bookID: bookID))
-      }
-      if !ebookStepCompleted {
-        try? FileManager.default.removeItem(at: DownloadManager.ebookDirectory(serverID: serverID, bookID: bookID))
-      }
-    case .ebook:
-      if !ebookStepCompleted {
-        try? FileManager.default.removeItem(at: DownloadManager.ebookDirectory(serverID: serverID, bookID: bookID))
-      }
-    case .episode(let podcastID, let episodeID):
-      try? FileManager.default.removeItem(
-        at: DownloadManager.episodeDirectory(serverID: serverID, podcastID: podcastID, episodeID: episodeID)
-      )
-    }
   }
 
   private func executeDownload() async {
@@ -459,7 +434,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
 
     let localBook = LocalBook(from: book)
     localBook.tracks = tracks
-    try? localBook.save()
+    try localBook.save()
 
     audioStepCompleted = true
   }
@@ -479,7 +454,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
     }
 
     AppLogger.download.info("Downloading ebook: \(ext)")
-    let ebookExpectedSize = book.media.ebookFile?.metadata.size ?? 50_000_000
+    let ebookExpectedSize = book.media.ebookFile?.metadata.size ?? 0
     let ebookFile = try await downloadEbook(from: ebookURL, ext: ext, expectedSize: ebookExpectedSize)
 
     guard let serverID = Audiobookshelf.shared.authentication.server?.id else {
@@ -488,7 +463,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
 
     let localBook = LocalBook(from: book)
     localBook.ebookFile = URL(string: "\(serverID)/ebooks/\(bookID)/\(bookID)\(ext)")
-    try? localBook.save()
+    try localBook.save()
     ebookStepCompleted = true
 
     bytesDownloadedSoFar += diskSize(of: ebookFile)
@@ -544,7 +519,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
     } else {
       localPodcast = LocalPodcast(from: podcast)
     }
-    try? localPodcast.save()
+    try localPodcast.save()
 
     let localEpisode = LocalEpisode(
       episodeID: episodeID,
@@ -569,7 +544,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
         Chapter(id: $0.id, start: $0.start, end: $0.end, title: $0.title)
       }
     )
-    try? localEpisode.save()
+    try localEpisode.save()
 
     resultIsFullyDownloaded = true
     progressSubject.send(1.0)
@@ -598,7 +573,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
 
       try await downloadFile(
         request: authorizedRequest(url: trackURL, credentials: context.credentials),
-        expectedSize: apiTrack.metadata?.size ?? 500_000_000,
+        expectedSize: apiTrack.metadata?.size ?? 0,
         destination: trackFile
       )
 
@@ -652,9 +627,6 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
   }
 
   private func prepareDownloadDirectory(_ url: URL) throws {
-    if FileManager.default.fileExists(atPath: url.path) {
-      try? FileManager.default.removeItem(at: url)
-    }
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
     var parent = url.deletingLastPathComponent()
@@ -707,12 +679,14 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
           } else {
             downloadTask = downloadSession.downloadTask(with: request)
           }
-          downloadTask.countOfBytesClientExpectsToReceive = expectedSize > 0 ? expectedSize : 500_000_000
+          downloadTask.countOfBytesClientExpectsToReceive =
+            expectedSize > 0 ? expectedSize : NSURLSessionTransferSizeUnknown
           downloadTask.priority = priority
 
           self.currentTrack = downloadTask
           self.storeContinuation(continuation)
           self.trackDestination = destination
+          self.trackExpectedSize = expectedSize
           self.lastResumeData = nil
 
           downloadTask.resume()
@@ -764,11 +738,31 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
       throw URLError(.cannotCreateFile)
     }
 
-    if FileManager.default.fileExists(atPath: destination.path) {
-      try FileManager.default.removeItem(at: destination)
+    if let expectedSize = trackExpectedSize, expectedSize > 0 {
+      let actualSize = diskSize(of: location)
+      guard actualSize == expectedSize else {
+        throw URLError(
+          .badServerResponse,
+          userInfo: [
+            NSLocalizedDescriptionKey:
+              "Downloaded file size mismatch: expected \(expectedSize), got \(actualSize)"
+          ]
+        )
+      }
     }
 
-    try FileManager.default.moveItem(at: location, to: destination)
+    let staging =
+      destination
+      .deletingLastPathComponent()
+      .appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).tmp")
+    try FileManager.default.moveItem(at: location, to: staging)
+
+    if FileManager.default.fileExists(atPath: destination.path) {
+      _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
+    } else {
+      try FileManager.default.moveItem(at: staging, to: destination)
+    }
+
     takeContinuation()?.resume()
   }
 

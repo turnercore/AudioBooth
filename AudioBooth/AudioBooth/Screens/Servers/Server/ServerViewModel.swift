@@ -208,7 +208,8 @@ final class ServerViewModel: ServerView.Model {
   ) {
     guard !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      authModel.canSubmitCredentials
     else {
       return
     }
@@ -245,7 +246,8 @@ final class ServerViewModel: ServerView.Model {
   ) {
     let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-      !trimmedKey.isEmpty
+      !trimmedKey.isEmpty,
+      authModel.canSubmitCredentials
     else { return }
 
     authModel.isLoading = true
@@ -277,7 +279,9 @@ final class ServerViewModel: ServerView.Model {
     authModel: AuthenticationView.Model,
     using session: WebAuthenticationSession
   ) {
-    guard !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    guard !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      authModel.canSubmitCredentials
+    else {
       return
     }
 
@@ -462,7 +466,7 @@ final class ServerViewModel: ServerView.Model {
     selectedLibrary = nil
 
     if let appGroupURL = FileManager.default.containerURL(
-      forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+      forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
     ) {
       let serverDirectory = appGroupURL.appendingPathComponent(serverID)
 

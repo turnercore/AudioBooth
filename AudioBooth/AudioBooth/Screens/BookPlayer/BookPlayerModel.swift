@@ -36,6 +36,8 @@ final class BookPlayerModel: BookPlayer.Model {
   private var recoveryAttempts = 0
   private var maxRecoveryAttempts = 3
   private var isRecovering = false
+  private var recoveryPlaybackStartedAt: Date?
+  private var lastAirPlayRouteAt: Date?
   private var interruptionBeganAt: Date?
   private var volumeObservation: NSKeyValueObservation?
   private var hasPlayedThisSession = false
@@ -256,7 +258,7 @@ final class BookPlayerModel: BookPlayer.Model {
       return
     }
 
-    guard let player, !isLoading else {
+    guard let player, !isLoading, !isRecovering else {
       pendingPlay = true
       return
     }
@@ -453,7 +455,7 @@ extension BookPlayerModel {
 
         if sessionManager.current?.isRemote == true && isSessionNotFoundError(error) {
           AppLogger.player.debug("Remote session not found (404) - triggering recovery")
-          handleStreamFailure(error: error)
+          handleStreamFailure(error: error, shouldResume: isPlaying || pendingPlay)
         }
       }
     }
@@ -800,6 +802,8 @@ extension BookPlayerModel {
     player.volume = Float(userPreferences.volumeLevel)
 
     if pendingPlay {
+      configureAudioSession()
+      try? audioSession.setActive(true)
       player.resume()
       pendingPlay = false
     }
@@ -855,20 +859,25 @@ extension BookPlayerModel {
         switch event {
         case .timeUpdate(let globalTime):
           self.onTimeChanged(globalTime)
+          self.resetRecoveryAfterStablePlayback()
 
         case .stateChanged(let newState):
           switch newState {
           case .playing:
             self.handlePlaybackStateChange(true)
             self.isLoading = false
-            self.recoveryAttempts = 0
+            if self.recoveryAttempts > 0, self.recoveryPlaybackStartedAt == nil {
+              self.recoveryPlaybackStartedAt = Date()
+            }
             (self.timer as? TimerPickerSheetViewModel)?.resumeLiveActivityIfNeeded()
           case .paused, .stopped:
             self.handlePlaybackStateChange(false)
             self.isLoading = false
+            self.recoveryPlaybackStartedAt = nil
             (self.timer as? TimerPickerSheetViewModel)?.pauseLiveActivity()
           case .buffering:
             self.isLoading = true
+            self.recoveryPlaybackStartedAt = nil
           case .ready:
             self.isLoading = false
             if self.pendingPlay {
@@ -876,19 +885,21 @@ extension BookPlayerModel {
             }
           case .error:
             self.isLoading = false
+            self.recoveryPlaybackStartedAt = nil
           }
           self.nowPlaying.update()
           self.widgetManager.update()
 
         case .stalled:
-          AppLogger.player.warning("Playback stalled, pausing")
-          self.isLoading = false
-          player.pause()
+          AppLogger.player.warning("Playback stalled, waiting for recovery")
+          self.isLoading = true
+          self.recoveryPlaybackStartedAt = nil
 
-        case .error(let error):
-          AppLogger.player.error("Player error: \(error?.localizedDescription ?? "Unknown")")
+        case .error(let error, let shouldResume):
+          AppLogger.player.error("Player reported a terminal playback error")
           self.isLoading = false
-          self.handleStreamFailure(error: error)
+          self.recoveryPlaybackStartedAt = nil
+          self.handleStreamFailure(error: error, shouldResume: shouldResume)
 
         case .finished:
           player.pause()
@@ -905,6 +916,18 @@ extension BookPlayerModel {
       .store(in: &cancellables)
 
     setupInterruptionObservers()
+  }
+
+  private func resetRecoveryAfterStablePlayback() {
+    guard recoveryAttempts > 0,
+      isPlaying,
+      let recoveryPlaybackStartedAt,
+      Date().timeIntervalSince(recoveryPlaybackStartedAt) >= 15
+    else { return }
+
+    AppLogger.player.info("Playback stable for 15 seconds - resetting recovery attempts")
+    recoveryAttempts = 0
+    self.recoveryPlaybackStartedAt = nil
   }
 
   private func setupInterruptionObservers() {
@@ -1039,6 +1062,12 @@ extension BookPlayerModel {
       interruptionBeganAt = isPlaying ? Date() : nil
 
     case .ended:
+      guard sessionManager.current != nil else {
+        AppLogger.player.info("Audio interruption ended - not resuming (no active session)")
+        interruptionBeganAt = nil
+        return
+      }
+
       applySmartRewind(reason: .onInterruption)
 
       if interruptionBeganAt != nil,
@@ -1046,6 +1075,7 @@ extension BookPlayerModel {
         AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume)
       {
         AppLogger.player.info("Audio interruption ended - resuming playback")
+        interruptionBeganAt = nil
         try? audioSession.setActive(true)
         player?.resume()
       } else if let beganAt = interruptionBeganAt,
@@ -1053,6 +1083,7 @@ extension BookPlayerModel {
         !audioSession.secondaryAudioShouldBeSilencedHint
       {
         AppLogger.player.info("Audio interruption ended - resuming playback (within 5 minutes)")
+        interruptionBeganAt = nil
         try? audioSession.setActive(true)
         player?.resume()
       } else {
@@ -1073,13 +1104,20 @@ extension BookPlayerModel {
       return
     }
 
+    let previousRoute = userInfo[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+    if audioSession.currentRoute.outputs.contains(where: { $0.portType == .airPlay })
+      || previousRoute?.outputs.contains(where: { $0.portType == .airPlay }) == true
+    {
+      lastAirPlayRouteAt = Date()
+    }
+
     switch reason {
     case .oldDeviceUnavailable:
       AppLogger.player.info("Audio route changed (old device unavailable) - pausing")
       player?.pause()
 
-    case .newDeviceAvailable, .override, .routeConfigurationChange, .categoryChange:
-      guard isPlaying else { return }
+    case .newDeviceAvailable, .override:
+      guard isPlaying, interruptionBeganAt == nil, sessionManager.current != nil else { return }
       AppLogger.player.info("Audio route changed (\(reason.rawValue)) - re-activating session")
       configureAudioSession()
       try? audioSession.setActive(true)
@@ -1112,18 +1150,7 @@ extension BookPlayerModel {
   }
 
   private func handleVolumeChange(from old: Float, to new: Float) {
-    if new == 0 && old > 0 {
-      AppLogger.player.info("Volume dropped to 0 - pausing playback")
-      interruptionBeganAt = isPlaying ? Date() : nil
-      player?.pause()
-    } else if new > 0 && old == 0, let beganAt = interruptionBeganAt {
-      if Date().timeIntervalSince(beganAt) < 60 * 5 {
-        AppLogger.player.info("Volume restored from 0 - resuming playback")
-        applySmartRewind(reason: .onInterruption)
-        player?.resume()
-      }
-      interruptionBeganAt = nil
-    }
+    AppLogger.player.debug("Output volume changed from \(old) to \(new)")
   }
 }
 
@@ -1131,6 +1158,12 @@ extension BookPlayerModel {
   private func updateMediaProgress() {
     Task { @MainActor in
       do {
+        if isPlaying, sessionManager.current == nil {
+          AppLogger.player.warning("Playback active with no session - recreating session")
+          Task { try? await setupSession(forceTranscode: false) }
+          return
+        }
+
         if isPlaying, let lastTime = lastPlaybackAt {
           let timeListened = Date().timeIntervalSince(lastTime)
           sessionManager.current?.pendingListeningTime += timeListened
@@ -1226,8 +1259,6 @@ extension BookPlayerModel {
         try? await audiobookshelf.libraries.markAsFinished(bookID: episodeProgressID)
       }
     }
-
-    ReviewRequestManager.shared.recordBookCompletion()
     playerManager.playNext(autoPlay: autoPlayNext)
   }
 
@@ -1245,13 +1276,15 @@ extension BookPlayerModel {
 }
 
 extension BookPlayerModel {
-  private func handleStreamFailure(error: Error?) {
+  private func handleStreamFailure(error: Error?, shouldResume: Bool) {
     if isConnectivityError(error) {
       AppLogger.player.warning("Connectivity error, pausing playback")
       player?.pause()
       Toast(error: "No connection. Try again when you're back online.").show()
       return
     }
+
+    pendingPlay = pendingPlay || shouldResume
 
     guard !isRecovering else {
       AppLogger.player.debug("Already recovering, skipping duplicate recovery attempt")
@@ -1260,13 +1293,15 @@ extension BookPlayerModel {
 
     guard recoveryAttempts < maxRecoveryAttempts else {
       AppLogger.player.warning("Max recovery attempts reached, giving up")
+      pendingPlay = false
       let errorMessage = error?.localizedDescription ?? "Stream unavailable"
       Toast(error: "Playback failed: \(errorMessage)").show()
       playerManager.clearCurrent()
       return
     }
 
-    guard item?.isDownloaded != true else {
+    guard item?.isDownloaded != true || isRecentAirPlayHandoff else {
+      pendingPlay = false
       AppLogger.player.debug("Book is downloaded, cannot recover from stream failure")
       return
     }
@@ -1274,7 +1309,7 @@ extension BookPlayerModel {
     isRecovering = true
 
     AppLogger.player.warning(
-      "Stream failure detected (attempt \(self.recoveryAttempts)/\(self.maxRecoveryAttempts))"
+      "Stream failure detected (attempt \(self.recoveryAttempts + 1)/\(self.maxRecoveryAttempts)) recentAirPlay=\(self.isRecentAirPlayHandoff)"
     )
 
     Task {
@@ -1314,11 +1349,12 @@ extension BookPlayerModel {
     recoveryAttempts += 1
 
     let isDownloaded = item?.isDownloaded ?? false
+    let useRemoteFallback = isRecentAirPlayHandoff
 
     player?.pause()
     isLoading = true
 
-    if !isDownloaded {
+    if !isDownloaded || useRemoteFallback {
       Toast(message: "Reconnecting...").show()
     }
 
@@ -1328,12 +1364,16 @@ extension BookPlayerModel {
     }
 
     do {
-      if !isDownloaded, recoveryAttempts > 1 {
+      if !isDownloaded || useRemoteFallback, recoveryAttempts > 1 {
         sessionManager.clearSession()
       }
-      try await setupSession(forceTranscode: recoveryAttempts > 2)
+      let forceTranscode = useRemoteFallback || recoveryAttempts > 2
+      AppLogger.player.info(
+        "Recovering playback: attempt=\(self.recoveryAttempts) downloaded=\(isDownloaded) recentAirPlay=\(useRemoteFallback) forceTranscode=\(forceTranscode)"
+      )
+      try await setupSession(forceTranscode: forceTranscode)
 
-      if !isDownloaded {
+      if !isDownloaded || useRemoteFallback {
         reloadPlayer()
         Toast(message: "Reconnected").show()
       } else {
@@ -1348,12 +1388,26 @@ extension BookPlayerModel {
       isLoading = false
       isRecovering = false
 
-      if recoveryAttempts < maxRecoveryAttempts && !isDownloaded {
-        handleStreamFailure(error: error)
+      guard pendingPlay else {
+        AppLogger.player.info("Playback recovery canceled by the user")
+        return
+      }
+
+      if recoveryAttempts < maxRecoveryAttempts && (!isDownloaded || useRemoteFallback) {
+        handleStreamFailure(error: error, shouldResume: pendingPlay)
       } else {
+        pendingPlay = false
         Toast(error: "Unable to reconnect. Please try again later.").show()
         playerManager.clearCurrent()
       }
     }
+  }
+
+  private var isRecentAirPlayHandoff: Bool {
+    if audioSession.currentRoute.outputs.contains(where: { $0.portType == .airPlay }) {
+      return true
+    }
+    guard let lastAirPlayRouteAt else { return false }
+    return Date().timeIntervalSince(lastAirPlayRouteAt) < 15
   }
 }

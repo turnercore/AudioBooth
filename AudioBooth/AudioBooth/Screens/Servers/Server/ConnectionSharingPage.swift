@@ -48,6 +48,22 @@ struct ConnectionSharingPage: View {
           .padding(12)
           .background(.orange.opacity(0.1))
           .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else if model.includeCredentials {
+          HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange)
+
+            Text(
+              "This exports long-lived credentials. Anyone with the link or QR code can connect as this server account."
+            )
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .fixedSize(horizontal: false, vertical: true)
+          }
+          .font(.footnote)
+          .padding(12)
+          .background(.orange.opacity(0.1))
+          .clipShape(RoundedRectangle(cornerRadius: 8))
         }
       }
 

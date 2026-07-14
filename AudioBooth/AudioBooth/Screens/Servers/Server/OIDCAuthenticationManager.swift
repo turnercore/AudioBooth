@@ -50,10 +50,6 @@ final class OIDCAuthenticationManager {
     callbackURL: URL,
     cookies: [HTTPCookie]
   ) async throws -> String {
-    AppLogger.authentication.info(
-      "Received callback URL: \(callbackURL)"
-    )
-
     guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
       let queryItems = components.queryItems
     else {
@@ -61,8 +57,9 @@ final class OIDCAuthenticationManager {
       throw OIDCError.invalidCallback
     }
 
-    let allParams = queryItems.map { "\($0.name): \($0.value ?? "nil")" }.joined(separator: ", ")
-    AppLogger.authentication.info("Callback query parameters: \(allParams)")
+    AppLogger.authentication.info(
+      "Received OIDC callback with \(queryItems.count) query parameters"
+    )
 
     let code = queryItems.first { $0.name == "code" }?.value
     let state = queryItems.first { $0.name == "state" }?.value
@@ -70,23 +67,21 @@ final class OIDCAuthenticationManager {
 
     if let error {
       AppLogger.authentication.error(
-        "Authentication failed with error parameter: \(error)"
+        "Authentication failed with OIDC error parameter"
       )
       throw OIDCError.authenticationFailed(error)
     }
 
     guard let authCode = code else {
-      let availableParams = queryItems.map { "\($0.name): \($0.value ?? "nil")" }.joined(
-        separator: ", "
-      )
+      let availableParams = queryItems.map(\.name).joined(separator: ", ")
       AppLogger.authentication.error(
-        "No authorization code in callback. Available params: \(availableParams)"
+        "No authorization code in callback. Available parameter names: \(availableParams)"
       )
       throw OIDCError.noAuthorizationCode(availableParams)
     }
 
     AppLogger.authentication.info(
-      "Calling API loginWithOIDC - code length: \(authCode.count), verifier length: \(self.pkce.verifier.count), state: \(state ?? "nil"), cookies count: \(cookies.count), custom headers count: \(self.customHeaders.count)"
+      "Calling API loginWithOIDC - code length: \(authCode.count), verifier length: \(self.pkce.verifier.count), state present: \(state != nil), cookies count: \(cookies.count), custom headers count: \(self.customHeaders.count)"
     )
 
     let connectionID = try await Audiobookshelf.shared.authentication.loginWithOIDC(
@@ -128,19 +123,15 @@ final class OIDCAuthenticationManager {
       throw OIDCError.failedToConstructURL
     }
 
-    AppLogger.authentication.info("Built OIDC URL: \(authURL)")
-    AppLogger.authentication.debug("PKCE challenge: \(self.pkce.challenge)")
     AppLogger.authentication.debug(
-      "PKCE verifier length: \(self.pkce.verifier.count)"
+      "Built OIDC URL with PKCE challenge length: \(self.pkce.challenge.count), verifier length: \(self.pkce.verifier.count)"
     )
 
     return authURL
   }
 
   private func makeInitialOAuthRequest(authURL: URL) async throws -> (URL, [HTTPCookie]) {
-    AppLogger.authentication.info(
-      "Making initial OAuth request to: \(authURL)"
-    )
+    AppLogger.authentication.info("Making initial OAuth request")
 
     var request = URLRequest(url: authURL)
     request.httpMethod = "GET"
@@ -173,14 +164,11 @@ final class OIDCAuthenticationManager {
         for: authURL
       )
       AppLogger.authentication.info(
-        "Received redirect to: \(redirectURL)"
-      )
-      AppLogger.authentication.info(
-        "Captured \(cookies.count) cookies: \(cookies.map { $0.name }.joined(separator: ", "))"
+        "Received OAuth redirect with \(cookies.count) cookies"
       )
       return (redirectURL, cookies)
     } else if httpResponse.statusCode == 400, let error = String(data: data, encoding: .utf8) {
-      AppLogger.authentication.error("Received 400 Bad Request: \(error)")
+      AppLogger.authentication.error("Received 400 Bad Request from OAuth endpoint")
       if error == "Invalid redirect_uri" {
         throw OIDCError.invalidCallback
       } else {
@@ -191,9 +179,7 @@ final class OIDCAuthenticationManager {
     AppLogger.authentication.error(
       "Unexpected response status: \(httpResponse.statusCode)"
     )
-    if let responseBody = String(data: data, encoding: .utf8) {
-      AppLogger.authentication.error("Response body: \(responseBody)")
-    }
+    AppLogger.authentication.error("Unexpected OAuth response body bytes: \(data.count)")
     throw URLError(.badServerResponse)
   }
 }

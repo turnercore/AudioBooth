@@ -64,8 +64,29 @@ public final class PlaybackSession {
     if let localPath = track.localPath {
       return localPath
     }
+    if let contentURLPath = track.contentURLPath,
+      let hlsURL = serverURL(forHLSReference: contentURLPath)
+    {
+      return hlsURL
+    }
     guard let baseURL else { return nil }
     return baseURL.appendingPathComponent("track/\(track.index)")
+  }
+
+  private func serverURL(forHLSReference reference: String) -> URL? {
+    guard let relative = URLComponents(string: reference),
+      relative.scheme == nil,
+      relative.host == nil,
+      relative.user == nil,
+      relative.password == nil,
+      relative.path == "/hls" || relative.path.hasPrefix("/hls/"),
+      var target = baseURL.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+    else { return nil }
+
+    target.percentEncodedPath = relative.percentEncodedPath
+    target.percentEncodedQuery = relative.percentEncodedQuery
+    target.fragment = nil
+    return target.url
   }
 }
 
@@ -113,7 +134,7 @@ extension PlaybackSession {
     } else {
       context.insert(self)
     }
-    try? context.save()
+    try context.save()
   }
 
 }

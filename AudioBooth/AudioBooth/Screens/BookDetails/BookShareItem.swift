@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 nonisolated struct BookShareItem: Transferable, Identifiable {
   enum Content {
     case audiobook([URL])
-    case ebook(URL)
+    case ebook(URL, headers: [String: String] = [:])
   }
 
   let content: Content
@@ -41,14 +41,14 @@ nonisolated struct BookShareItem: Transferable, Identifiable {
       }
       return url
 
-    case .ebook(let url):
+    case .ebook(let url, let headers):
       let sanitized = Self.sanitizedName(name)
       let filename = sanitized.isEmpty ? "ebook" : sanitized
 
       if url.isFileURL {
         return Self.prepared(linkingTo: url, named: filename)
       }
-      return try await downloadEbook(from: url, named: filename)
+      return try await downloadEbook(from: url, headers: headers, named: filename)
     }
   }
 
@@ -83,8 +83,16 @@ nonisolated struct BookShareItem: Transferable, Identifiable {
     return zipDestination
   }
 
-  private func downloadEbook(from remoteURL: URL, named filename: String) async throws -> URL {
-    let (downloadedURL, _) = try await URLSession.shared.download(from: remoteURL)
+  private func downloadEbook(
+    from remoteURL: URL,
+    headers: [String: String],
+    named filename: String
+  ) async throws -> URL {
+    var request = URLRequest(url: remoteURL)
+    for (name, value) in headers {
+      request.setValue(value, forHTTPHeaderField: name)
+    }
+    let (downloadedURL, _) = try await URLSession.shared.download(for: request)
 
     let fm = FileManager.default
     let directory = fm.temporaryDirectory.appendingPathComponent("ShareEbook", isDirectory: true)

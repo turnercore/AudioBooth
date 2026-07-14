@@ -21,6 +21,7 @@ final class SessionManager {
   private let audiobookshelf = Audiobookshelf.shared
 
   private(set) var current: PlaybackSession?
+  private var currentHasHLS = false
   private var lastSyncAt = Date()
   private var inactivityTask: Task<Void, Never>?
 
@@ -30,6 +31,7 @@ final class SessionManager {
 
   func clearSession() {
     current = nil
+    currentHasHLS = false
     UserDefaults.standard.set(0, forKey: retryCountKey)
     cancelScheduledSessionClose()
     cancelInactivityTask()
@@ -56,11 +58,24 @@ extension SessionManager {
         "Session exists for different item/episode, server will close old session when starting new one"
       )
       self.current = nil
+      currentHasHLS = false
       cancelScheduledSessionClose()
     }
 
     if let item, let current, isSameItem {
-      if item.isDownloaded, current.isRemote {
+      if forceTranscode {
+        if currentHasHLS {
+          AppLogger.session.debug("HLS playback session already active, reusing it")
+          return item
+        }
+        AppLogger.session.info("Replacing direct session with forced transcode session")
+        do {
+          try await closeSession()
+        } catch {
+          AppLogger.session.warning("Could not close direct session before replacement; clearing local state")
+          clearSession()
+        }
+      } else if item.isDownloaded, current.isRemote {
         AppLogger.session.info(
           "Item is now downloaded, closing remote session to switch to local session"
         )
@@ -73,7 +88,7 @@ extension SessionManager {
       }
     }
 
-    if let item, item.isDownloaded {
+    if let item, item.isDownloaded, !forceTranscode {
       startLocalSession(
         libraryItemID: itemID,
         episodeID: episodeID,
@@ -85,14 +100,13 @@ extension SessionManager {
     }
 
     do {
-      let result = try await startSession(
+      return try await startSession(
         itemID: itemID,
         episodeID: episodeID,
         item: item,
         mediaProgress: mediaProgress,
         forceTranscode: forceTranscode
       )
-      return result.updatedItem
     } catch {
       AppLogger.session.warning("Failed to create remote session: \(error)")
       throw error
@@ -105,7 +119,7 @@ extension SessionManager {
     item: (any PlayableItem)?,
     mediaProgress: MediaProgress,
     forceTranscode: Bool
-  ) async throws -> (session: Session, updatedItem: any PlayableItem) {
+  ) async throws -> any PlayableItem {
     AppLogger.session.info("Fetching session from server...")
 
     let audiobookshelfSession = try await audiobookshelf.sessions.start(
@@ -115,7 +129,30 @@ extension SessionManager {
       timeout: item == nil ? 30 : 10
     )
 
-    guard let session = Session(from: audiobookshelfSession) else {
+    let trackCount = audiobookshelfSession.audioTracks?.count ?? 0
+    let hlsTrackCount =
+      audiobookshelfSession.audioTracks?.count { track in
+        guard let reference = track.contentUrl,
+          let components = URLComponents(string: reference),
+          components.scheme == nil,
+          components.host == nil,
+          components.user == nil,
+          components.password == nil
+        else { return false }
+        return components.path == "/hls" || components.path.hasPrefix("/hls/")
+      } ?? 0
+    let hasCompleteHLSSet = trackCount > 0 && hlsTrackCount == trackCount
+    AppLogger.session.info(
+      "Playback source response: forceTranscode=\(forceTranscode) tracks=\(trackCount) hlsTracks=\(hlsTrackCount)"
+    )
+    if forceTranscode, !hasCompleteHLSSet {
+      AppLogger.session.warning("Forced transcode response did not contain HLS for every track")
+    }
+
+    guard
+      let serverURL = audiobookshelf.authentication.serverURL,
+      let sessionURL = Self.sessionURL(for: audiobookshelfSession.id, serverURL: serverURL)
+    else {
       throw SessionError.failedToCreateSession
     }
 
@@ -180,13 +217,13 @@ extension SessionManager {
     }
 
     let playbackSession = PlaybackSession(
-      id: session.id,
+      id: audiobookshelfSession.id,
       libraryItemID: itemID,
       episodeID: episodeID,
       startTime: mediaProgress.currentTime,
       currentTime: mediaProgress.currentTime,
       duration: updatedItem.duration,
-      baseURL: session.url,
+      baseURL: sessionURL,
       displayTitle: updatedItem.title,
       displayAuthor: updatedItem.details
     )
@@ -194,12 +231,18 @@ extension SessionManager {
       audiobookshelfSession.audioTracks?.map(Track.init) ?? updatedItem.orderedTracks
     try playbackSession.save()
     current = playbackSession
+    currentHasHLS = hasCompleteHLSSet
 
     UserDefaults.standard.set(0, forKey: retryCountKey)
     scheduleSessionClose()
 
     AppLogger.session.info("Session setup completed successfully")
-    return (session, updatedItem)
+    return updatedItem
+  }
+
+  private static func sessionURL(for sessionID: String, serverURL: URL) -> URL? {
+    let baseURL = serverURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    return URL(string: "\(baseURL)/public/session/\(sessionID)")
   }
 
   private func startLocalSession(
@@ -220,6 +263,7 @@ extension SessionManager {
     session.tracks = item.orderedTracks
     try? session.save()
     current = session
+    currentHasHLS = false
     AppLogger.session.info("Started local session: \(session.id)")
   }
 
@@ -270,6 +314,7 @@ extension SessionManager {
             "Book is downloaded, clearing session to allow local session creation"
           )
           current = nil
+          currentHasHLS = false
           UserDefaults.standard.removeObject(forKey: sessionIDKey)
           UserDefaults.standard.removeObject(forKey: retryCountKey)
           cancelScheduledSessionClose()
@@ -282,6 +327,7 @@ extension SessionManager {
             "Maximum retry attempts reached. Giving up on closing session \(session.id). Session will auto-expire on server after 24h."
           )
           current = nil
+          currentHasHLS = false
           UserDefaults.standard.removeObject(forKey: sessionIDKey)
           UserDefaults.standard.removeObject(forKey: retryCountKey)
           cancelScheduledSessionClose()
@@ -299,7 +345,11 @@ extension SessionManager {
         throw error
       }
       current = nil
+      currentHasHLS = false
     } else {
+      current = nil
+      currentHasHLS = false
+
       do {
         let sessionSync = SessionSync(session)
         try await audiobookshelf.sessions.syncLocalSession(sessionSync)
@@ -315,7 +365,6 @@ extension SessionManager {
           "Failed to sync local session: \(error). Session will be synced on next app startup."
         )
       }
-      current = nil
     }
   }
 }
@@ -389,6 +438,7 @@ extension SessionManager {
       newSession.tracks = session.tracks
       try? newSession.save()
       current = newSession
+      currentHasHLS = false
       AppLogger.session.info("Day changed, started new local session: \(newSession.id)")
     }
   }
@@ -597,6 +647,7 @@ extension SessionManager {
         }
 
         AppLogger.session.info("Inactivity timeout reached - closing session")
+        inactivityTask = nil
         try? await closeSession()
       } catch {
         AppLogger.session.debug("Inactivity task sleep was interrupted: \(error)")

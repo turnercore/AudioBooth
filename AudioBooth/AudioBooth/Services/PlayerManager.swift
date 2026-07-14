@@ -33,7 +33,7 @@ final class PlayerManager: ObservableObject, Sendable {
 
   private static let currentIDKey = "currentBookID"
   private static let queueKey = "playerQueue"
-  private let sharedDefaults = UserDefaults(suiteName: "group.me.jgrenier.audioBS")
+  private let sharedDefaults = UserDefaults(suiteName: "group.com.turnercore.audioBS")
 
   private var cancellables = Set<AnyCancellable>()
 
@@ -177,7 +177,7 @@ final class PlayerManager: ObservableObject, Sendable {
 
   func openRemoteBookAsEbook(_ book: Book) {
     if let ebookURL = book.ebookURL {
-      reader = EbookReaderViewModel(source: .remote(ebookURL), bookID: book.id)
+      reader = EbookReaderViewModel(source: .remote(ebookURL, headers: [:]), bookID: book.id)
     } else {
       Toast(error: "Ebook not available").show()
     }

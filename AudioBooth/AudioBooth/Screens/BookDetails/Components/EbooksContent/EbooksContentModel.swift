@@ -18,28 +18,26 @@ final class EbooksContentModel: EbooksContent.Model {
       return
     }
 
-    ebookReader = EbookReaderViewModel(source: .remote(url), bookID: nil)
+    ebookReader = EbookReaderViewModel(source: .remote(url, headers: ebook.authorizationHeaders), bookID: nil)
   }
 }
 
 extension EbooksContent.SupplementaryEbook {
   func url(for bookID: String) -> URL? {
-    guard let serverURL = Audiobookshelf.shared.serverURL,
-      let token = Audiobookshelf.shared.authentication.server?.token
-    else {
+    guard let serverURL = Audiobookshelf.shared.serverURL else {
       return nil
     }
 
-    var url = serverURL.appendingPathComponent("api/items/\(bookID)/file/\(ino)")
-    switch token {
-    case .legacy(let token):
-      url.append(queryItems: [URLQueryItem(name: "token", value: token)])
-    case .bearer(let accessToken, _, _):
-      url.append(queryItems: [URLQueryItem(name: "token", value: accessToken)])
-    case .apiKey(let key):
-      url.append(queryItems: [URLQueryItem(name: "token", value: key)])
+    return serverURL.appendingPathComponent("api/items/\(bookID)/file/\(ino)")
+  }
+
+  var authorizationHeaders: [String: String] {
+    guard let server = Audiobookshelf.shared.authentication.server else {
+      return [:]
     }
 
-    return url
+    var headers = server.customHeaders
+    headers["Authorization"] = server.token.bearer
+    return headers
   }
 }

@@ -71,8 +71,6 @@ final class BookDetailsViewModel: BookDetailsView.Model {
           Series(id: series.id, name: series.name, sequence: series.sequence)
         }
 
-        let mediaType = localBook.mediaType
-
         let currentTime = MediaProgress.progress(for: bookID) * localBook.duration
         let chapters: [ChaptersContent.Chapter]?
         if !localBook.chapters.isEmpty {
@@ -96,7 +94,8 @@ final class BookDetailsViewModel: BookDetailsView.Model {
           coverURL: localBook.coverURL(raw: true),
           duration: localBook.duration,
           size: size > 0 ? size : nil,
-          mediaType: mediaType,
+          hasAudio: localBook.mediaType.contains(.audiobook),
+          isEbook: localBook.mediaType.contains(.ebook),
           publisher: localBook.publisher,
           publishedYear: localBook.publishedYear,
           language: localBook.language,
@@ -167,9 +166,14 @@ final class BookDetailsViewModel: BookDetailsView.Model {
             ino: libraryFile.ino
           )
           let localURL = libraryFile.ino == downloadedEbookIno ? downloadedEbookURL : nil
-          if let shareURL = localURL ?? ebook.url(for: bookID) {
+          if let localURL {
             ebook.shareItem = BookShareItem(
-              content: .ebook(shareURL),
+              content: .ebook(localURL),
+              name: libraryFile.metadata.filename
+            )
+          } else if let shareURL = ebook.url(for: bookID) {
+            ebook.shareItem = BookShareItem(
+              content: .ebook(shareURL, headers: ebook.authorizationHeaders),
               name: libraryFile.metadata.filename
             )
           }
@@ -202,7 +206,8 @@ final class BookDetailsViewModel: BookDetailsView.Model {
         coverURL: book.coverURL(raw: true),
         duration: book.duration,
         size: book.size,
-        mediaType: book.mediaType,
+        hasAudio: book.mediaType.contains(.audiobook),
+        isEbook: book.mediaType.contains(.ebook),
         publisher: book.publisher,
         publishedYear: book.publishedYear,
         language: book.media.metadata.language,
@@ -262,7 +267,8 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     coverURL: URL?,
     duration: TimeInterval,
     size: Int64? = nil,
-    mediaType: Book.MediaType?,
+    hasAudio: Bool,
+    isEbook: Bool,
     publisher: String? = nil,
     publishedYear: String? = nil,
     language: String? = nil,
@@ -284,9 +290,6 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     self.tags = tags
     self.description = description?.replacingOccurrences(of: "\n", with: "<br>")
     self.flags = flags
-
-    let hasAudio = mediaType?.contains(.audiobook) == true
-    let isEbook = mediaType?.contains(.ebook) == true
 
     if isEbook {
       self.ereaderDevices =
@@ -534,7 +537,7 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     if let ebookURL = localBook?.ebookLocalPath {
       ebookReader = EbookReaderViewModel(source: .local(ebookURL), bookID: bookID)
     } else if let book, let ebookURL = book.ebookURL {
-      ebookReader = EbookReaderViewModel(source: .remote(ebookURL), bookID: bookID)
+      ebookReader = EbookReaderViewModel(source: .remote(ebookURL, headers: [:]), bookID: bookID)
     } else {
       Toast(error: "Ebook URL not available").show()
     }
@@ -655,7 +658,7 @@ extension BookDetailsViewModel {
     if let localBook, !localBook.chapters.isEmpty {
       modelChapters = localBook.chapters
     } else if let book, let apiChapters = book.chapters {
-      modelChapters = apiChapters.map(Models.Chapter.init(from:))
+      modelChapters = apiChapters.map { Models.Chapter(from: $0) }
     } else {
       return
     }

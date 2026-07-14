@@ -1,4 +1,3 @@
-import API
 @preconcurrency import Foundation
 import SwiftData
 
@@ -31,8 +30,19 @@ public final class LocalBook {
     authors.map(\.name).joined(separator: ", ")
   }
 
-  public var mediaType: Book.MediaType {
-    var types: Book.MediaType = []
+  public struct MediaKind: OptionSet, Sendable {
+    public let rawValue: Int
+
+    public static let audiobook = MediaKind(rawValue: 1 << 0)
+    public static let ebook = MediaKind(rawValue: 1 << 1)
+
+    public init(rawValue: Int) {
+      self.rawValue = rawValue
+    }
+  }
+
+  public var mediaType: MediaKind {
+    var types: MediaKind = []
     if !tracks.isEmpty {
       types.insert(.audiobook)
     }
@@ -47,7 +57,7 @@ public final class LocalBook {
 
     guard
       let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.me.jgrenier.audioBS"
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else {
       return nil
@@ -92,7 +102,7 @@ public final class LocalBook {
     isAbridged: Bool = false,
     publisher: String? = nil,
     language: String? = nil,
-    displayOrder: Int = 0,
+    displayOrder: Int = Int(Date().timeIntervalSince1970 * 1000),
     createdAt: Date = Date(),
     ebookFile: URL? = nil
   ) {
@@ -173,13 +183,13 @@ extension LocalBook {
       context.insert(self)
     }
 
-    try? context.save()
+    try context.save()
   }
 
   public func delete() throws {
     let context = ModelContextProvider.shared.context
     context.delete(self)
-    try? context.save()
+    try context.save()
   }
 
   public static func updateDisplayOrders(_ bookIDsInOrder: [String]) throws {
@@ -189,7 +199,7 @@ extension LocalBook {
         book.displayOrder = index
       }
     }
-    try? context.save()
+    try context.save()
   }
 
   public var orderedChapters: [Chapter] {
@@ -207,41 +217,6 @@ extension LocalBook {
     return tracks.allSatisfy { track in track.relativePath != nil }
   }
 
-  public convenience init(from book: Book) {
-    let authors =
-      book.media.metadata.authors?.map { apiAuthor in
-        Author(id: apiAuthor.id, name: apiAuthor.name)
-      } ?? []
-
-    let series =
-      book.media.metadata.series?.map { apiSeries in
-        Series(id: apiSeries.id, name: apiSeries.name, sequence: apiSeries.sequence)
-      } ?? []
-
-    let narrators = book.media.metadata.narrators ?? []
-
-    self.init(
-      bookID: book.id,
-      libraryID: book.libraryID,
-      title: book.title,
-      authors: authors,
-      narrators: narrators,
-      series: series,
-      coverURL: book.coverURL(),
-      duration: book.duration,
-      tracks: book.tracks?.map(Track.init) ?? [],
-      chapters: book.chapters?.map(Chapter.init) ?? [],
-      publishedYear: book.publishedYear,
-      subtitle: book.media.metadata.subtitle,
-      bookDescription: book.description,
-      genres: book.genres,
-      tags: book.tags,
-      isExplicit: book.media.metadata.explicit ?? false,
-      isAbridged: book.media.metadata.abridged ?? false,
-      publisher: book.publisher,
-      language: book.media.metadata.language
-    )
-  }
 }
 
 extension LocalBook: PlayableItem {
