@@ -5,19 +5,22 @@ import XCTest
 
 @MainActor
 final class DownloadStateBatchingTests: XCTestCase {
-  func testUpdateDownloadStatesPublishesOneCompleteSnapshot() {
-    let manager = DownloadManager(downloadStateEntries: {
-      [
-        (id: "book-1", isDownloaded: true),
-        (id: "episode-1", isDownloaded: false),
-      ]
-    })
+  func testUpdateDownloadStatesPublishesOneCompleteSnapshot() async {
+    let manager = DownloadManager(
+      downloadStateEntries: {
+        [
+          (id: "book-1", isDownloaded: true),
+          (id: "episode-1", isDownloaded: false),
+        ]
+      },
+      refreshOnInit: false
+    )
     var publishedSnapshots: [[String: DownloadManager.DownloadState]] = []
     let cancellable = manager.$downloadStates
       .dropFirst()
       .sink { publishedSnapshots.append($0) }
 
-    manager.updateDownloadStates()
+    await manager.refreshDownloadStates()
 
     XCTAssertEqual(publishedSnapshots.count, 1)
     XCTAssertEqual(
@@ -28,5 +31,27 @@ final class DownloadStateBatchingTests: XCTestCase {
       ]
     )
     withExtendedLifetime(cancellable) {}
+  }
+
+  func testOlderRefreshCannotOverwriteNewerSnapshot() async throws {
+    var callCount = 0
+    let manager = DownloadManager(
+      downloadStateEntries: {
+        callCount += 1
+        if callCount == 1 {
+          try? await Task.sleep(for: .milliseconds(100))
+          return [(id: "episode", isDownloaded: false)]
+        }
+        return [(id: "episode", isDownloaded: true)]
+      },
+      refreshOnInit: false
+    )
+
+    manager.updateDownloadStates()
+    await Task.yield()
+    manager.updateDownloadStates()
+    try await Task.sleep(for: .milliseconds(200))
+
+    XCTAssertEqual(manager.downloadStates["episode"], .downloaded)
   }
 }

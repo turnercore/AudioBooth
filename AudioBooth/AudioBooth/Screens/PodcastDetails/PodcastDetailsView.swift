@@ -835,10 +835,15 @@ extension PodcastDetailsView {
 
     @discardableResult
     func applyDownloadStates(_ states: [String: DownloadManager.DownloadState]) -> Int {
-      let changedIDs = Set(observedDownloadStates.keys).union(states.keys).filter {
-        observedDownloadStates[$0] != states[$0]
+      let relevantStates = Dictionary(
+        uniqueKeysWithValues: episodeIndexByID.keys.map {
+          ($0, states[$0] ?? .notDownloaded)
+        }
+      )
+      let changedIDs = Set(observedDownloadStates.keys).union(relevantStates.keys).filter {
+        observedDownloadStates[$0] != relevantStates[$0]
       }
-      observedDownloadStates = states
+      observedDownloadStates = relevantStates
 
       var updatedEpisodes = episodes
       var updatedFilteredEpisodes = filteredEpisodes
@@ -846,7 +851,7 @@ extension PodcastDetailsView {
 
       for id in changedIDs {
         guard let episodeIndex = episodeIndexByID[id] else { continue }
-        let state = states[id] ?? .notDownloaded
+        let state = relevantStates[id] ?? .notDownloaded
         guard updatedEpisodes[episodeIndex].downloadState != state else { continue }
 
         updatedEpisodes[episodeIndex].downloadState = state

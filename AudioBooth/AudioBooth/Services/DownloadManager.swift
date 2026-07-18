@@ -7,6 +7,33 @@ import Models
 import Pulse
 import SwiftData
 
+private struct DownloadStateEntry: Sendable {
+  let id: String
+  let isDownloaded: Bool
+}
+
+@ModelActor
+private actor DownloadStateSnapshotReader {
+  func fetchEntries() throws -> [DownloadStateEntry] {
+    let books = try modelContext.fetch(FetchDescriptor<LocalBook>())
+    let episodes = try modelContext.fetch(FetchDescriptor<LocalEpisode>())
+    return books.map { book in
+      let isDownloaded =
+        book.tracks.isEmpty
+        ? book.ebookFile != nil
+        : book.tracks.allSatisfy { $0.relativePath != nil }
+      return DownloadStateEntry(id: book.bookID, isDownloaded: isDownloaded)
+    }
+      + episodes.map { episode in
+        DownloadStateEntry(
+          id: episode.episodeID,
+          isDownloaded: episode.track?.relativePath != nil
+        )
+      }
+  }
+}
+
+@MainActor
 final class DownloadManager: NSObject, ObservableObject {
   static let shared = DownloadManager()
 
@@ -69,24 +96,44 @@ final class DownloadManager: NSObject, ObservableObject {
 
   private var activeOperations: [String: DownloadOperation] = [:]
   private var progressCancellables: [String: AnyCancellable] = [:]
-  private let downloadStateEntries: () -> [(id: String, isDownloaded: Bool)]?
+  private let downloadStateEntries: () async -> [(id: String, isDownloaded: Bool)]?
+  private var downloadStateRefreshGeneration = 0
   @Published var downloadStates: [String: DownloadState] = [:]
   @Published var downloadInfos: [String: DownloadInfo] = [:]
 
   var backgroundCompletionHandler: (() -> Void)?
 
   override convenience init() {
-    self.init(downloadStateEntries: { Self.fetchDownloadStateEntries() })
+    self.init(downloadStateEntries: { await Self.fetchDownloadStateEntries() })
   }
 
-  init(downloadStateEntries: @escaping () -> [(id: String, isDownloaded: Bool)]?) {
+  init(
+    downloadStateEntries: @escaping () async -> [(id: String, isDownloaded: Bool)]?,
+    refreshOnInit: Bool = true
+  ) {
     self.downloadStateEntries = downloadStateEntries
     super.init()
-    updateDownloadStates()
+    if refreshOnInit {
+      updateDownloadStates()
+    }
   }
 
   func updateDownloadStates() {
-    guard let entries = downloadStateEntries() else { return }
+    downloadStateRefreshGeneration += 1
+    let generation = downloadStateRefreshGeneration
+    Task { [weak self] in
+      await self?.refreshDownloadStates(generation: generation)
+    }
+  }
+
+  func refreshDownloadStates() async {
+    downloadStateRefreshGeneration += 1
+    await refreshDownloadStates(generation: downloadStateRefreshGeneration)
+  }
+
+  private func refreshDownloadStates(generation: Int) async {
+    guard let entries = await downloadStateEntries() else { return }
+    guard generation == downloadStateRefreshGeneration else { return }
 
     var snapshot = downloadStates
     for entry in entries {
@@ -95,17 +142,13 @@ final class DownloadManager: NSObject, ObservableObject {
     downloadStates = snapshot
   }
 
-  private static func fetchDownloadStateEntries() -> [(id: String, isDownloaded: Bool)]? {
+  private static func fetchDownloadStateEntries() async -> [(id: String, isDownloaded: Bool)]? {
     guard Audiobookshelf.shared.libraries.current != nil else { return nil }
 
-    var entries: [(id: String, isDownloaded: Bool)] = []
-    if let books = try? LocalBook.fetchAll() {
-      entries.append(contentsOf: books.map { (id: $0.bookID, isDownloaded: $0.isDownloaded) })
-    }
-    if let episodes = try? LocalEpisode.fetchAll() {
-      entries.append(contentsOf: episodes.map { (id: $0.episodeID, isDownloaded: $0.isDownloaded) })
-    }
-    return entries
+    let reader = DownloadStateSnapshotReader(
+      modelContainer: ModelContextProvider.shared.modelContainer
+    )
+    return try? await reader.fetchEntries().map { (id: $0.id, isDownloaded: $0.isDownloaded) }
   }
 
   func isDownloading(for bookID: String) -> Bool {

@@ -32,6 +32,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 ## Verification
 
 - Use `xcodebuild -project AudioBooth/AudioBooth.xcodeproj -scheme AudioBooth -destination 'generic/platform=iOS' -configuration Debug build CODE_SIGNING_ALLOWED=NO` for broad compile validation.
+- Use the `AudioBoothTests` target through the shared `AudioBooth` scheme for focused iOS unit tests; `build-for-testing` against `generic/platform=iOS` provides a device-independent compile check.
 - Simulator testing may depend on local CoreSimulator/Xcode health.
 - Test watch/widget behavior when changing watch connectivity, app groups, timelines, or shared defaults.
 

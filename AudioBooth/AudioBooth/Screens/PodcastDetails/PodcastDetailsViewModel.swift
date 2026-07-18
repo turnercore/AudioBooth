@@ -208,7 +208,7 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
     loadTask = nil
   }
 
-  deinit {
+  isolated deinit {
     loadTask?.cancel()
   }
 
