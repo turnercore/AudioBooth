@@ -36,6 +36,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		7A0000020000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3FC8DC662E638F5E00A4B080 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3FC8DC6D2E638F5E00A4B080;
+			remoteInfo = AudioBooth;
+		};
 		3F2D3C022EBE711A00D49AFF /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 3FC8DC662E638F5E00A4B080 /* Project object */;
@@ -96,6 +103,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		7A0000010000000000000001 /* AudioBoothTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AudioBoothTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3F2D3BF32EBE711800D49AFF /* AudioBoothWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AudioBoothWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3F2D3BF42EBE711800D49AFF /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		3F2D3BF62EBE711800D49AFF /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
@@ -154,6 +162,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		7A0000030000000000000003 /* AudioBoothTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AudioBoothTests;
+			sourceTree = "<group>";
+		};
 		3F2D3BF82EBE711800D49AFF /* AudioBoothWidget */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -191,6 +204,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		7A0000060000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		3F2D3BF02EBE711800D49AFF /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -258,6 +278,7 @@
 			isa = PBXGroup;
 			children = (
 				3FC8DC702E638F5E00A4B080 /* AudioBooth */,
+				7A0000030000000000000003 /* AudioBoothTests */,
 				3FC8DC822E63904C00A4B080 /* Packages */,
 				3FBEA0662E8CD49300976BA0 /* AudioBooth Watch App */,
 				3F2D3BF82EBE711800D49AFF /* AudioBoothWidget */,
@@ -272,6 +293,7 @@
 			isa = PBXGroup;
 			children = (
 				3FC8DC6E2E638F5E00A4B080 /* AudioBooth.app */,
+				7A0000010000000000000001 /* AudioBoothTests.xctest */,
 				3FBEA0652E8CD49300976BA0 /* AudioBooth Watch App.app */,
 				3F2D3BF32EBE711800D49AFF /* AudioBoothWidgetExtension.appex */,
 				3F5A20502F6E656C00CFD89E /* AudioBoothWatchWidgetExtension.appex */,
@@ -292,6 +314,29 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		7A0000040000000000000004 /* AudioBoothTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A00000A000000000000000A /* Build configuration list for PBXNativeTarget "AudioBoothTests" */;
+			buildPhases = (
+				7A0000050000000000000005 /* Sources */,
+				7A0000060000000000000006 /* Frameworks */,
+				7A0000070000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7A0000080000000000000008 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7A0000030000000000000003 /* AudioBoothTests */,
+			);
+			name = AudioBoothTests;
+			packageProductDependencies = (
+			);
+			productName = AudioBoothTests;
+			productReference = 7A0000010000000000000001 /* AudioBoothTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		3F2D3BF22EBE711800D49AFF /* AudioBoothWidgetExtension */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 3F2D3C052EBE711A00D49AFF /* Build configuration list for PBXNativeTarget "AudioBoothWidgetExtension" */;
@@ -421,6 +466,10 @@
 				LastSwiftUpdateCheck = 2620;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
+					7A0000040000000000000004 = {
+						CreatedOnToolsVersion = 26.0;
+						TestTargetID = 3FC8DC6D2E638F5E00A4B080;
+					};
 					3F2D3BF22EBE711800D49AFF = {
 						CreatedOnToolsVersion = 26.0.1;
 					};
@@ -464,6 +513,7 @@
 			projectRoot = "";
 			targets = (
 				3FC8DC6D2E638F5E00A4B080 /* AudioBooth */,
+				7A0000040000000000000004 /* AudioBoothTests */,
 				3FBEA0642E8CD49300976BA0 /* AudioBooth Watch App */,
 				3F2D3BF22EBE711800D49AFF /* AudioBoothWidgetExtension */,
 				3F5A204F2F6E656C00CFD89E /* AudioBoothWatchWidgetExtension */,
@@ -472,6 +522,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		7A0000070000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		3F2D3BF12EBE711800D49AFF /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -525,6 +582,13 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		7A0000050000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		3F2D3BEF2EBE711800D49AFF /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -556,6 +620,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		7A0000080000000000000008 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3FC8DC6D2E638F5E00A4B080 /* AudioBooth */;
+			targetProxy = 7A0000020000000000000002 /* PBXContainerItemProxy */;
+		};
 		3F2D3C032EBE711A00D49AFF /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			platformFilter = ios;
@@ -576,6 +645,50 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		7A00000B000000000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AudioBooth.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AudioBooth";
+			};
+			name = Debug;
+		};
+		7A00000C000000000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AudioBooth.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AudioBooth";
+			};
+			name = Release;
+		};
 		3F2D3C062EBE711A00D49AFF /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -984,6 +1097,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		7A00000A000000000000000A /* Build configuration list for PBXNativeTarget "AudioBoothTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A00000B000000000000000B /* Debug */,
+				7A00000C000000000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		3F2D3C052EBE711A00D49AFF /* Build configuration list for PBXNativeTarget "AudioBoothWidgetExtension" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

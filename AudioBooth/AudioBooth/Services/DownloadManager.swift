@@ -69,30 +69,43 @@ final class DownloadManager: NSObject, ObservableObject {
 
   private var activeOperations: [String: DownloadOperation] = [:]
   private var progressCancellables: [String: AnyCancellable] = [:]
+  private let downloadStateEntries: () -> [(id: String, isDownloaded: Bool)]?
   @Published var downloadStates: [String: DownloadState] = [:]
   @Published var downloadInfos: [String: DownloadInfo] = [:]
 
   var backgroundCompletionHandler: (() -> Void)?
 
-  override init() {
+  override convenience init() {
+    self.init(downloadStateEntries: { Self.fetchDownloadStateEntries() })
+  }
+
+  init(downloadStateEntries: @escaping () -> [(id: String, isDownloaded: Bool)]?) {
+    self.downloadStateEntries = downloadStateEntries
     super.init()
     updateDownloadStates()
   }
 
   func updateDownloadStates() {
-    guard Audiobookshelf.shared.libraries.current != nil else { return }
+    guard let entries = downloadStateEntries() else { return }
 
+    var snapshot = downloadStates
+    for entry in entries {
+      snapshot[entry.id] = entry.isDownloaded ? .downloaded : .notDownloaded
+    }
+    downloadStates = snapshot
+  }
+
+  private static func fetchDownloadStateEntries() -> [(id: String, isDownloaded: Bool)]? {
+    guard Audiobookshelf.shared.libraries.current != nil else { return nil }
+
+    var entries: [(id: String, isDownloaded: Bool)] = []
     if let books = try? LocalBook.fetchAll() {
-      for book in books {
-        downloadStates[book.bookID] = book.isDownloaded ? .downloaded : .notDownloaded
-      }
+      entries.append(contentsOf: books.map { (id: $0.bookID, isDownloaded: $0.isDownloaded) })
     }
-
     if let episodes = try? LocalEpisode.fetchAll() {
-      for episode in episodes {
-        downloadStates[episode.episodeID] = episode.isDownloaded ? .downloaded : .notDownloaded
-      }
+      entries.append(contentsOf: episodes.map { (id: $0.episodeID, isDownloaded: $0.isDownloaded) })
     }
+    return entries
   }
 
   func isDownloading(for bookID: String) -> Bool {
