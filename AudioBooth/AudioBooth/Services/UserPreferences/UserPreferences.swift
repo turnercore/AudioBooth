@@ -129,6 +129,9 @@ final class UserPreferences: ObservableObject {
   @AppStorage("cardCoverBorderWidth")
   var cardCoverBorderWidth: CardBorderWidth = .small
 
+  @AppStorage("dimCoverWhenCompleted")
+  var dimCoverWhenCompleted: Bool = true
+
   @AppStorage("showContinueTimeRemaining")
   var showContinueTimeRemaining: Bool = true
 
@@ -401,7 +404,7 @@ enum ShakeSensitivity: String, CaseIterable {
     self != .off
   }
 
-  var displayText: String {
+  var displayText: LocalizedStringResource {
     switch self {
     case .off: "Off"
     case .veryLow: "Very Low"
@@ -455,7 +458,7 @@ enum PlayerOrientation: String, CaseIterable {
   case portrait
   case landscape
 
-  var displayText: String {
+  var displayText: LocalizedStringResource {
     switch self {
     case .auto: "Auto"
     case .portrait: "Portrait"

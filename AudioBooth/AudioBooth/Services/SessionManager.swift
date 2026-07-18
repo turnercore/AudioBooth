@@ -275,7 +275,6 @@ extension SessionManager {
       return
     }
 
-    session.updatedAt = Date()
     try session.save()
 
     if session.isRemote {
@@ -376,9 +375,11 @@ extension SessionManager {
     }
 
     let now = Date.now
+    let endOfSessionDay =
+      Calendar.current.date(bySettingHour: 23, minute: 59, second: 59, of: session.updatedAt) ?? now
 
     session.currentTime = currentTime
-    session.updatedAt = now
+    session.updatedAt = min(now, endOfSessionDay)
     try session.save()
 
     guard session.pendingListeningTime >= 20, now.timeIntervalSince(lastSyncAt) >= 10 else {
