@@ -12,6 +12,7 @@ struct ContentView: View {
 
   @State private var isKeyboardVisible = false
   @State private var selectedTab: TabSelection = .home
+  @StateObject private var homeModel = HomePageModel()
   @StateObject private var libraryModel = LibraryRootPage.Model()
   @StateObject private var podcastsModel = PodcastsRootPage.Model()
   @StateObject private var collectionsModel = CollectionsRootPage.Model()
@@ -102,7 +103,7 @@ struct ContentView: View {
   private var modernTabView: some View {
     TabView(selection: tabSelection) {
       Tab("Home", systemImage: "house", value: .home) {
-        HomePage(model: HomePageModel())
+        HomePage(model: homeModel)
       }
 
       if let current = libraries.current {
@@ -158,7 +159,7 @@ struct ContentView: View {
   @ViewBuilder
   private var legacyTabView: some View {
     TabView {
-      HomePage(model: HomePageModel())
+      HomePage(model: homeModel)
         .padding(.bottom, 0.5)
         .safeAreaInset(edge: .bottom) { miniPlayer }
         .tabItem {

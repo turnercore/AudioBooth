@@ -39,8 +39,9 @@ final class HomePageModel: HomePage.Model {
 
     NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
       .sink { [weak self] _ in
+        guard let self, self.hasStarted else { return }
         Task {
-          await self?.fetchRemoteContent()
+          await self.fetchRemoteContent()
         }
       }
       .store(in: &cancellables)
@@ -55,7 +56,7 @@ final class HomePageModel: HomePage.Model {
       .store(in: &cancellables)
   }
 
-  override func onAppear() {
+  override func start() {
     Task {
       await fetchContent()
     }
@@ -72,6 +73,7 @@ final class HomePageModel: HomePage.Model {
   }
 
   override func onReset(_ shouldRefresh: Bool) {
+    resetAutomaticLoading()
     continueListeningBooks = []
     continueListeningEpisodes = []
     personalizedSections = []

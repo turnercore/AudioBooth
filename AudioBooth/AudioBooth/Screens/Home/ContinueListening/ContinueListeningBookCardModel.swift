@@ -97,7 +97,7 @@ final class ContinueListeningBookCardModel: BookCard.Model {
   private func observeMediaProgress() {
     let bookID = id
     progressObservation = Task { [weak self] in
-      for await mediaProgress in MediaProgress.observe(where: \.bookID, equals: bookID) {
+      for await mediaProgress in MediaProgress.observe(bookID: bookID) {
         self?.mediaProgress = mediaProgress
       }
     }
@@ -114,6 +114,10 @@ final class ContinueListeningBookCardModel: BookCard.Model {
         }
         self.isDownloaded = states[self.id] == .downloaded
       }
+  }
+
+  isolated deinit {
+    progressObservation?.cancel()
   }
 }
 

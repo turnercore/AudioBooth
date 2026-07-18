@@ -74,9 +74,13 @@ final class PodcastCardModel: BookCard.Model {
   private func observeMediaProgress() {
     let episodeID = id
     progressObservation = Task { [weak self] in
-      for await _ in MediaProgress.observe(where: \.bookID, equals: episodeID) {
-        self?.cover.progress = MediaProgress.progress(for: episodeID)
+      for await mediaProgress in MediaProgress.observe(bookID: episodeID) {
+        self?.cover.progress = mediaProgress.progress
       }
     }
+  }
+
+  isolated deinit {
+    progressObservation?.cancel()
   }
 }

@@ -25,7 +25,7 @@ struct HomePage: View {
     return Text("Home")
   }
 
-  @StateObject var model: Model
+  @ObservedObject var model: Model
   @State private var showingSettings = false
   @State private var showingServerList = false
   @State private var showingServerDetails = false
@@ -395,6 +395,8 @@ extension HomePage {
 extension HomePage {
   @Observable
   class Model: ObservableObject {
+    private(set) var hasStarted = false
+
     var isLoading: Bool
     var isRoot: Bool
 
@@ -430,12 +432,22 @@ extension HomePage {
     var dailyGoal: (current: Double, goal: Int)?
     var availableLibraries: [LibraryItem]
 
-    func onAppear() {}
+    final func onAppear() {
+      guard !hasStarted else { return }
+      hasStarted = true
+      start()
+    }
+
+    func start() {}
     func refresh() async {}
     func onReset(_ shouldRefresh: Bool) {}
     func onPreferencesChanged() {}
     func onLibrarySelected(_ id: String) {}
     func onToggleAlternativeURL() {}
+
+    func resetAutomaticLoading() {
+      hasStarted = false
+    }
 
     init(
       isLoading: Bool = false,
