@@ -112,6 +112,7 @@ struct PodcastDetailsView: View {
       }
     }
     .onAppear(perform: model.onAppear)
+    .onDisappear(perform: model.onDisappear)
   }
 
   private var autoQueueMenu: some View {
@@ -728,11 +729,44 @@ extension PodcastDetailsView {
     var episodeCount: Int
     var feedURL: String?
 
-    var episodes: [Episode]
-    var searchText: String
-    var selectedFilter: EpisodeFilter
-    var selectedSort: EpisodeSort
-    var ascending: Bool
+    var episodes: [Episode] {
+      didSet {
+        guard !isUpdatingEpisodeState else { return }
+        rebuildEpisodeIndex()
+        refreshFilteredEpisodes()
+      }
+    }
+    var searchText: String {
+      didSet {
+        guard searchText != oldValue else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    var selectedFilter: EpisodeFilter {
+      didSet {
+        guard selectedFilter != oldValue else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    var selectedSort: EpisodeSort {
+      didSet {
+        guard selectedSort != oldValue, !isUpdatingProjectionOptions else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    var ascending: Bool {
+      didSet {
+        guard ascending != oldValue, !isUpdatingProjectionOptions else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    private(set) var filteredEpisodes: [Episode] = []
+
+    @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
+    @ObservationIgnored private var filteredEpisodeIndexByID: [String: Int] = [:]
+    @ObservationIgnored private var observedDownloadStates: [String: DownloadManager.DownloadState] = [:]
+    @ObservationIgnored private var isUpdatingEpisodeState = false
+    @ObservationIgnored private var isUpdatingProjectionOptions = false
 
     var currentlyPlayingEpisodeID: String?
     var isPlaying: Bool
@@ -753,7 +787,7 @@ extension PodcastDetailsView {
       }
     }
 
-    var filteredEpisodes: [Episode] {
+    private func projectedEpisodes() -> [Episode] {
       var result = episodes
 
       if !searchText.isEmpty {
@@ -781,6 +815,7 @@ extension PodcastDetailsView {
     }
 
     func onAppear() {}
+    func onDisappear() {}
     func onPlayEpisode(_ episode: Episode) {}
     func onPlayAllEpisodes() {}
     func onDownloadAllEpisodes() {}
@@ -790,9 +825,55 @@ extension PodcastDetailsView {
       if selectedSort == sort {
         ascending.toggle()
       } else {
+        isUpdatingProjectionOptions = true
         selectedSort = sort
         ascending = false
+        isUpdatingProjectionOptions = false
+        refreshFilteredEpisodes()
       }
+    }
+
+    @discardableResult
+    func applyDownloadStates(_ states: [String: DownloadManager.DownloadState]) -> Int {
+      let changedIDs = Set(observedDownloadStates.keys).union(states.keys).filter {
+        observedDownloadStates[$0] != states[$0]
+      }
+      observedDownloadStates = states
+
+      var updatedEpisodes = episodes
+      var updatedFilteredEpisodes = filteredEpisodes
+      var changedKnownEpisodeCount = 0
+
+      for id in changedIDs {
+        guard let episodeIndex = episodeIndexByID[id] else { continue }
+        let state = states[id] ?? .notDownloaded
+        guard updatedEpisodes[episodeIndex].downloadState != state else { continue }
+
+        updatedEpisodes[episodeIndex].downloadState = state
+        if let filteredIndex = filteredEpisodeIndexByID[id] {
+          updatedFilteredEpisodes[filteredIndex].downloadState = state
+        }
+        changedKnownEpisodeCount += 1
+      }
+
+      guard changedKnownEpisodeCount > 0 else { return 0 }
+
+      isUpdatingEpisodeState = true
+      episodes = updatedEpisodes
+      isUpdatingEpisodeState = false
+      filteredEpisodes = updatedFilteredEpisodes
+      return changedKnownEpisodeCount
+    }
+
+    private func rebuildEpisodeIndex() {
+      episodeIndexByID = Dictionary(uniqueKeysWithValues: episodes.indices.map { (episodes[$0].id, $0) })
+    }
+
+    private func refreshFilteredEpisodes() {
+      filteredEpisodes = projectedEpisodes()
+      filteredEpisodeIndexByID = Dictionary(
+        uniqueKeysWithValues: filteredEpisodes.indices.map { (filteredEpisodes[$0].id, $0) }
+      )
     }
 
     init(
@@ -839,6 +920,8 @@ extension PodcastDetailsView {
       self.ascending = ascending
       self.currentlyPlayingEpisodeID = currentlyPlayingEpisodeID
       self.isPlaying = isPlaying
+      rebuildEpisodeIndex()
+      refreshFilteredEpisodes()
     }
   }
 }

@@ -3,6 +3,7 @@ import Foundation
 import Logging
 import Models
 
+@MainActor
 final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
   private let episodeID: String
   private let podcastID: String
@@ -54,6 +55,29 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
     }
 
     super.init(downloadState: downloadState, actions: actions)
+  }
+
+  convenience init(
+    podcastID: String,
+    podcastTitle: String,
+    podcastAuthor: String?,
+    coverURL: URL?,
+    episode: PodcastEpisodeProjection,
+    progress: Double
+  ) {
+    self.init(
+      episodeID: episode.id,
+      podcastID: podcastID,
+      podcastTitle: podcastTitle,
+      podcastAuthor: podcastAuthor,
+      coverURL: coverURL,
+      episodeTitle: episode.title,
+      episodeDuration: episode.duration,
+      episodeSize: episode.size,
+      isCompleted: progress >= 1.0,
+      progress: progress,
+      apiEpisode: episode.apiEpisode
+    )
   }
 
   override func onAppear() {
