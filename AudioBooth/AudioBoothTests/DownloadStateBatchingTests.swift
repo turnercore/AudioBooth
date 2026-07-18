@@ -54,4 +54,45 @@ final class DownloadStateBatchingTests: XCTestCase {
 
     XCTAssertEqual(manager.downloadStates["episode"], .downloaded)
   }
+
+  func testRefreshRemovesStaleEntriesAndPreservesLiveDownloadState() async {
+    let manager = DownloadManager(
+      downloadStateEntries: {
+        [(id: "persisted", isDownloaded: true)]
+      },
+      refreshOnInit: false
+    )
+    manager.downloadStates = [
+      "stale": .downloaded,
+      "active": .downloading(progress: 0.4),
+    ]
+
+    await manager.refreshDownloadStates()
+
+    XCTAssertEqual(
+      manager.downloadStates,
+      [
+        "persisted": .downloaded,
+        "active": .downloading(progress: 0.4),
+      ]
+    )
+  }
+
+  func testRefreshDoesNotOverwriteProgressChangedWhileReadingSnapshot() async throws {
+    let manager = DownloadManager(
+      downloadStateEntries: {
+        try? await Task.sleep(for: .milliseconds(100))
+        return [(id: "active", isDownloaded: false)]
+      },
+      refreshOnInit: false
+    )
+    manager.downloadStates["active"] = .downloading(progress: 0.1)
+
+    let refresh = Task { await manager.refreshDownloadStates() }
+    try await Task.sleep(for: .milliseconds(20))
+    manager.downloadStates["active"] = .downloading(progress: 0.8)
+    await refresh.value
+
+    XCTAssertEqual(manager.downloadStates["active"], .downloading(progress: 0.8))
+  }
 }

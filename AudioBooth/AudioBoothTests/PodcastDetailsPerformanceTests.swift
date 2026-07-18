@@ -78,6 +78,42 @@ final class PodcastDetailsPerformanceTests: XCTestCase {
     )
   }
 
+  func testProgressUpdateMutatesProjectedEpisodeWithoutReprojectingOrder() {
+    let model = PodcastDetailsView.Model(
+      podcastID: "podcast",
+      isLoading: false,
+      episodes: [
+        episode(id: "episode-1", title: "First"),
+        episode(id: "episode-2", title: "Second"),
+      ],
+      selectedSort: .title,
+      ascending: false
+    )
+    let projectedIDs = model.filteredEpisodes.map(\.id)
+
+    XCTAssertTrue(model.applyProgress(0.5, to: "episode-1"))
+
+    XCTAssertEqual(model.filteredEpisodes.map(\.id), projectedIDs)
+    XCTAssertEqual(model.episodes.first { $0.id == "episode-1" }?.progress, 0.5)
+    XCTAssertEqual(model.filteredEpisodes.first { $0.id == "episode-1" }?.progress, 0.5)
+  }
+
+  func testProgressUpdateRefreshesFilterOnlyWhenMembershipChanges() {
+    let model = PodcastDetailsView.Model(
+      podcastID: "podcast",
+      isLoading: false,
+      episodes: [episode(id: "episode")],
+      selectedFilter: .inProgress
+    )
+    XCTAssertTrue(model.filteredEpisodes.isEmpty)
+
+    model.applyProgress(0.5, to: "episode")
+    XCTAssertEqual(model.filteredEpisodes.map(\.id), ["episode"])
+
+    model.applyProgress(1, to: "episode")
+    XCTAssertTrue(model.filteredEpisodes.isEmpty)
+  }
+
   private func episode(
     id: String,
     title: String = "Episode",

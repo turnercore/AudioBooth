@@ -788,26 +788,7 @@ extension PodcastDetailsView {
     }
 
     private func projectedEpisodes() -> [Episode] {
-      var result = episodes
-
-      if !searchText.isEmpty {
-        let query = searchText.lowercased()
-        result = result.filter {
-          $0.title.lowercased().contains(query)
-            || ($0.description?.lowercased().contains(query) ?? false)
-        }
-      }
-
-      switch selectedFilter {
-      case .all:
-        break
-      case .incomplete:
-        result = result.filter { !$0.isCompleted }
-      case .complete:
-        result = result.filter { $0.isCompleted }
-      case .inProgress:
-        result = result.filter { $0.progress > 0 && !$0.isCompleted }
-      }
+      var result = episodes.filter(matchesProjection)
 
       result.sort { selectedSort.areInOrder($0, $1, ascending: ascending) }
 
@@ -870,6 +851,33 @@ extension PodcastDetailsView {
       return changedKnownEpisodeCount
     }
 
+    @discardableResult
+    func applyProgress(_ progress: Double, to episodeID: String) -> Bool {
+      guard let episodeIndex = episodeIndexByID[episodeID] else { return false }
+      let isCompleted = progress >= 1.0
+      guard
+        episodes[episodeIndex].progress != progress
+          || episodes[episodeIndex].isCompleted != isCompleted
+      else { return false }
+
+      let wasProjected = filteredEpisodeIndexByID[episodeID] != nil
+      var updatedEpisode = episodes[episodeIndex]
+      updatedEpisode.progress = progress
+      updatedEpisode.isCompleted = isCompleted
+
+      isUpdatingEpisodeState = true
+      episodes[episodeIndex] = updatedEpisode
+      isUpdatingEpisodeState = false
+
+      let isProjected = matchesProjection(updatedEpisode)
+      if wasProjected != isProjected {
+        refreshFilteredEpisodes()
+      } else if isProjected, let filteredIndex = filteredEpisodeIndexByID[episodeID] {
+        filteredEpisodes[filteredIndex] = updatedEpisode
+      }
+      return true
+    }
+
     private func rebuildEpisodeIndex() {
       episodeIndexByID = Dictionary(uniqueKeysWithValues: episodes.indices.map { (episodes[$0].id, $0) })
     }
@@ -879,6 +887,27 @@ extension PodcastDetailsView {
       filteredEpisodeIndexByID = Dictionary(
         uniqueKeysWithValues: filteredEpisodes.indices.map { (filteredEpisodes[$0].id, $0) }
       )
+    }
+
+    private func matchesProjection(_ episode: Episode) -> Bool {
+      if !searchText.isEmpty {
+        let query = searchText.lowercased()
+        guard
+          episode.title.lowercased().contains(query)
+            || (episode.description?.lowercased().contains(query) ?? false)
+        else { return false }
+      }
+
+      switch selectedFilter {
+      case .all:
+        return true
+      case .incomplete:
+        return !episode.isCompleted
+      case .complete:
+        return episode.isCompleted
+      case .inProgress:
+        return episode.progress > 0 && !episode.isCompleted
+      }
     }
 
     init(

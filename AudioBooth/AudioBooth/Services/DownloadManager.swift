@@ -132,12 +132,20 @@ final class DownloadManager: NSObject, ObservableObject {
   }
 
   private func refreshDownloadStates(generation: Int) async {
+    let statesBeforeRefresh = downloadStates
     guard let entries = await downloadStateEntries() else { return }
     guard generation == downloadStateRefreshGeneration else { return }
 
-    var snapshot = downloadStates
-    for entry in entries {
-      snapshot[entry.id] = entry.isDownloaded ? .downloaded : .notDownloaded
+    var snapshot = Dictionary(
+      uniqueKeysWithValues: entries.map {
+        ($0.id, $0.isDownloaded ? DownloadState.downloaded : .notDownloaded)
+      }
+    )
+    for (id, currentState) in downloadStates {
+      let changedWhileRefreshing = statesBeforeRefresh[id] != currentState
+      if changedWhileRefreshing || currentState.isDownloading {
+        snapshot[id] = currentState
+      }
     }
     downloadStates = snapshot
   }
@@ -188,19 +196,20 @@ final class DownloadManager: NSObject, ObservableObject {
     progressCancellables[bookID] = progressCancellable
 
     operation.completionBlock = { [weak self] in
+      guard let manager = self else { return }
       Task { @MainActor in
-        self?.progressCancellables[bookID]?.cancel()
-        self?.progressCancellables.removeValue(forKey: bookID)
-        self?.activeOperations.removeValue(forKey: bookID)
-        self?.downloadInfos.removeValue(forKey: bookID)
+        manager.progressCancellables[bookID]?.cancel()
+        manager.progressCancellables.removeValue(forKey: bookID)
+        manager.activeOperations.removeValue(forKey: bookID)
+        manager.downloadInfos.removeValue(forKey: bookID)
 
         if operation.isFinished && !operation.isCancelled {
           AppLogger.download.info("Download completed successfully for book: \(bookID)")
-          self?.downloadStates[bookID] =
+          manager.downloadStates[bookID] =
             operation.resultIsFullyDownloaded || wasDownloaded ? .downloaded : .notDownloaded
         } else {
           AppLogger.download.info("Download cancelled or failed for book: \(bookID)")
-          self?.downloadStates[bookID] = wasDownloaded ? .downloaded : .notDownloaded
+          manager.downloadStates[bookID] = wasDownloaded ? .downloaded : .notDownloaded
         }
       }
     }
@@ -231,6 +240,15 @@ final class DownloadManager: NSObject, ObservableObject {
       delegate: OrphanedDownloadSessionDelegate(),
       delegateQueue: nil
     )
+  }
+}
+
+private extension DownloadManager.DownloadState {
+  var isDownloading: Bool {
+    if case .downloading = self {
+      return true
+    }
+    return false
   }
 }
 
