@@ -37,6 +37,10 @@ struct NarratorsPage: View {
     .refreshable {
       await model.refresh()
     }
+    .conditionalSearchable(
+      text: $model.searchViewModel.searchText,
+      prompt: "Search books, series, authors, and narrators"
+    )
     .onAppear(perform: model.onAppear)
   }
 

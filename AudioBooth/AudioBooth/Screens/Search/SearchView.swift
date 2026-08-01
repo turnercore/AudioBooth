@@ -14,7 +14,7 @@ struct SearchPage: View {
         .searchFocused($fieldFocused)
         .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
         .onAppear {
-          if model.searchText.isEmpty {
+          if !model.hasSearchQuery {
             fieldFocused = true
           }
         }
@@ -39,7 +39,7 @@ struct SearchView: View {
 
   @ViewBuilder
   var content: some View {
-    if model.searchText.isEmpty {
+    if !model.hasSearchQuery {
       emptyState
         .containerRelativeFrame(.vertical)
     } else if model.isLoading {
@@ -95,7 +95,7 @@ struct SearchView: View {
         .font(.headline)
         .foregroundColor(.primary)
 
-      Text("Try adjusting your search terms")
+      Text("Check the spelling or try fewer words")
         .font(.subheadline)
         .foregroundColor(.secondary)
     }
@@ -215,13 +215,19 @@ struct SearchView: View {
   var authorsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Authors")
+        Text(model.authorsAreSuggestions ? "Suggested Authors" : "Authors")
           .font(.title2)
           .fontWeight(.bold)
 
         Spacer()
 
         Text("\(model.authors.count)")
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+
+      if model.authorsAreSuggestions {
+        Label("Close matches", systemImage: "sparkles")
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -233,13 +239,19 @@ struct SearchView: View {
   var narratorsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Narrators")
+        Text(model.narratorsAreSuggestions ? "Suggested Narrators" : "Narrators")
           .font(.title2)
           .fontWeight(.bold)
 
         Spacer()
 
         Text("\(model.narrators.count)")
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+
+      if model.narratorsAreSuggestions {
+        Label("Close matches", systemImage: "sparkles")
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -331,6 +343,12 @@ extension SearchView {
     var narrators: [String] = []
     var tags: [String] = []
     var genres: [String] = []
+    var authorsAreSuggestions = false
+    var narratorsAreSuggestions = false
+
+    var hasSearchQuery: Bool {
+      !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     func onSearchChanged(_ searchText: String) {}
   }

@@ -28,6 +28,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - For downloads/offline changes, inspect `DownloadManager`, `StorageManager`, local SwiftData models, and app-group paths together.
 - For auth/server changes, inspect API services, OIDC flow, custom headers, watch connectivity, and logging together.
 - For UI changes, follow existing SwiftUI view/model structure and avoid broad restyling.
+- For library search changes, preserve server matches and use cached filter data only as a conservative fuzzy fallback.
 
 ## Verification
 

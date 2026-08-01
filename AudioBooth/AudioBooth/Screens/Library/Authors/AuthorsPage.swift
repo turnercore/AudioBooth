@@ -19,7 +19,7 @@ struct AuthorsPage: View {
       }
       .conditionalSearchable(
         text: $model.searchViewModel.searchText,
-        prompt: "Search books, series, and authors"
+        prompt: "Search books, series, authors, and narrators"
       )
       .toolbar { toolbarContent }
       .onAppear(perform: model.onAppear)

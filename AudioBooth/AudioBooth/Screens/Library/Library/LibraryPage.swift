@@ -13,7 +13,7 @@ struct LibraryPage: View {
       content
         .conditionalSearchable(
           text: $model.search.searchText,
-          prompt: "Search books, series, and authors"
+          prompt: "Search books, series, authors, and narrators"
         )
         .refreshable {
           await model.refresh()

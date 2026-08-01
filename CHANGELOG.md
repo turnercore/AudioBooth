@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Fuzzy author and narrator search - Suggest close name matches for misspelled searches
 
 ### Changed
+- Search experience - Normalize whitespace, reduce input debounce, label close matches, and expose narrator search consistently
 
 ### Fixed
 - Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape
