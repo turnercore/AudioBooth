@@ -8,6 +8,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 
 - Own files under `API/`.
 - Public types here are consumed by the app, widgets, watch app, and intents through package dependencies.
+- Unit tests for API response compatibility live under `API/Tests/APITests/`.
 - Keep this package usable by iOS and watchOS targets declared in `API/Package.swift`.
 
 ## Local Contracts
@@ -28,7 +29,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 
 ## Verification
 
-- Prefer the root generic iOS `xcodebuild` command for validation.
-- `swift test` in this package is not currently a reliable standalone check.
+- Run `cd API && swift test` for API decoder and service unit tests.
+- Prefer the root generic iOS `xcodebuild` command for app integration validation.
 
 ## Child DOX Index

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+- Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape
 
 ## [1.11.0]
 

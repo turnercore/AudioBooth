@@ -26,6 +26,10 @@ let package = Package(
         .product(name: "Nuke", package: "Nuke"),
         .product(name: "Pulse", package: "Pulse"),
       ],
-    )
+    ),
+    .testTarget(
+      name: "APITests",
+      dependencies: ["API"]
+    ),
   ]
 )
