@@ -30,6 +30,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - For UI changes, follow existing SwiftUI view/model structure and avoid broad restyling.
 - For library search changes, preserve server matches and use cached filter data only as a conservative fuzzy fallback.
 - Keep Home personalized-shelf loading independent from user progress synchronization so one failure cannot leave all shelves stale.
+- Home requests up to 20 personalized items per shelf, including the API's expanded Recent Series result.
 
 ## Verification
 

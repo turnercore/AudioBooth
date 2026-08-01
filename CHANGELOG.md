@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Search experience - Normalize whitespace, reduce input debounce, label close matches, and expose narrator search consistently
+- Home shelves - Show up to 20 Recently Added books and Recent Series while preserving the server's recent-series rules
 
 ### Fixed
 - Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape

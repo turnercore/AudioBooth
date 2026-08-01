@@ -158,7 +158,11 @@ public final class LibrariesService: ObservableObject {
     return try? JSONDecoder().decode(Personalized.self, from: data)
   }
 
-  public func fetchPersonalized(bypassingCache: Bool = false) async throws -> Personalized {
+  public func fetchPersonalized(
+    limitPerShelf: Int? = nil,
+    recentSeriesLimit: Int? = nil,
+    bypassingCache: Bool = false
+  ) async throws -> Personalized {
     guard let networkService = audiobookshelf.networkService else {
       throw Audiobookshelf.AudiobookshelfError.networkError(
         "Network service not configured. Please login first."
@@ -171,21 +175,39 @@ public final class LibrariesService: ObservableObject {
       )
     }
 
-    var query: [String: String]?
+    var query: [String: String] = [:]
+    if let limitPerShelf, limitPerShelf > 0 {
+      query["limit"] = String(limitPerShelf)
+    }
     if bypassingCache {
-      query = ["refresh": String(Int(Date().timeIntervalSince1970 * 1000))]
+      query["refresh"] = String(Int(Date().timeIntervalSince1970 * 1000))
     }
 
     let request = NetworkRequest<[Personalized.Section]>(
       path: "/api/libraries/\(library.id)/personalized",
       method: .get,
-      query: query
+      query: query.isEmpty ? nil : query
+    )
+
+    async let expandedRecentSeries = fetchExpandedRecentSeries(
+      limit: recentSeriesLimit,
+      libraryID: library.id,
+      networkService: networkService
     )
 
     do {
       let response = try await networkService.send(request)
+      var sections = response.value
 
-      let personalized = Personalized(libraryID: library.id, sections: response.value)
+      if let series = await expandedRecentSeries, !series.isEmpty {
+        sections = Self.mergingRecentSeries(
+          series,
+          into: sections,
+          limit: recentSeriesLimit ?? series.count
+        )
+      }
+
+      let personalized = Personalized(libraryID: library.id, sections: sections)
 
       let encoder = JSONEncoder()
       if let data = try? encoder.encode(personalized) {
@@ -199,6 +221,73 @@ public final class LibrariesService: ObservableObject {
         "Failed to fetch personalized sections: \(error.localizedDescription)"
       )
     }
+  }
+
+  private func fetchExpandedRecentSeries(
+    limit: Int?,
+    libraryID: String,
+    networkService: NetworkService
+  ) async -> [Series]? {
+    guard let limit, limit > 5 else { return nil }
+
+    let request = NetworkRequest<Page<Series>>(
+      path: "/api/libraries/\(libraryID)/series",
+      method: .get,
+      query: [
+        "limit": String(limit),
+        "page": "0",
+        "sort": SeriesService.SortBy.addedAt.rawValue,
+        "desc": "1",
+      ]
+    )
+
+    guard let page = try? await networkService.send(request).value else { return nil }
+
+    let cutoff = Date().addingTimeInterval(-60 * 24 * 60 * 60)
+    return Self.recentSeries(from: page.results, since: cutoff)
+  }
+
+  nonisolated static func recentSeries(from series: [Series], since cutoff: Date) -> [Series] {
+    series.filter { series in
+      guard let addedAt = series.addedAt else { return false }
+      return addedAt >= cutoff
+    }
+  }
+
+  nonisolated static func mergingRecentSeries(
+    _ expandedSeries: [Series],
+    into sections: [Personalized.Section],
+    limit: Int
+  ) -> [Personalized.Section] {
+    guard !expandedSeries.isEmpty, limit > 0 else { return sections }
+
+    var sections = sections
+    let existingIndex = sections.firstIndex(where: { $0.id == "recent-series" })
+    let label = existingIndex.map { sections[$0].label } ?? "Recent Series"
+    var mergedSeries = expandedSeries
+    var mergedIDs = Set(expandedSeries.map(\.id))
+
+    if let existingIndex, case .series(let existingSeries) = sections[existingIndex].entities {
+      for existing in existingSeries where mergedIDs.insert(existing.id).inserted {
+        mergedSeries.append(existing)
+      }
+    }
+
+    let replacement = Personalized.Section(
+      id: "recent-series",
+      label: label,
+      entities: .series(Array(mergedSeries.prefix(limit)))
+    )
+
+    if let existingIndex {
+      sections[existingIndex] = replacement
+    } else if let recentlyAddedIndex = sections.firstIndex(where: { $0.id == "recently-added" }) {
+      sections.insert(replacement, at: recentlyAddedIndex + 1)
+    } else {
+      sections.append(replacement)
+    }
+
+    return sections
   }
 
   public func markAsFinished(bookID: String) async throws {

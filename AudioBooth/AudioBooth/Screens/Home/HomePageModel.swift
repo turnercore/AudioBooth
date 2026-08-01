@@ -7,6 +7,8 @@ import SwiftUI
 import WidgetKit
 
 final class HomePageModel: HomePage.Model {
+  private static let homeShelfLimit = 20
+
   private let downloadManager = DownloadManager.shared
   private let playerManager = PlayerManager.shared
   private let preferences = UserPreferences.shared
@@ -496,6 +498,8 @@ extension HomePageModel {
 
     do {
       let personalized = try await Audiobookshelf.shared.libraries.fetchPersonalized(
+        limitPerShelf: Self.homeShelfLimit,
+        recentSeriesLimit: Self.homeShelfLimit,
         bypassingCache: bypassingCache
       )
       processSections(personalized.sections)

@@ -27,6 +27,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - When changing request headers, check image loading, watch connectivity, and custom headers.
 - Keep local HTTP support intentional and visible; do not silently downgrade credentialed requests.
 - Preserve personalized-shelf caching by default; bypass it only for explicit freshness requests such as app start or pull-to-refresh.
+- When expanding the server's five-item Recent Series shelf, preserve its 60-day window and use the permission-aware series endpoint.
 
 ## Verification
 
