@@ -24,7 +24,7 @@ public enum HomeSection: String, CaseIterable, Identifiable, Codable {
     case .continueReading: String(localized: "Continue Reading")
     case .continueSeries: String(localized: "Continue Series")
     case .recentlyAdded: String(localized: "Recently Added")
-    case .recentSeries: String(localized: "Recent Series")
+    case .recentSeries: String(localized: "Recently Added Series")
     case .discover: String(localized: "Discover")
     case .listenAgain: String(localized: "Listen Again")
     case .newestAuthors: String(localized: "Newest Authors")

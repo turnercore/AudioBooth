@@ -158,7 +158,7 @@ public final class LibrariesService: ObservableObject {
     return try? JSONDecoder().decode(Personalized.self, from: data)
   }
 
-  public func fetchPersonalized() async throws -> Personalized {
+  public func fetchPersonalized(bypassingCache: Bool = false) async throws -> Personalized {
     guard let networkService = audiobookshelf.networkService else {
       throw Audiobookshelf.AudiobookshelfError.networkError(
         "Network service not configured. Please login first."
@@ -171,9 +171,15 @@ public final class LibrariesService: ObservableObject {
       )
     }
 
+    var query: [String: String]?
+    if bypassingCache {
+      query = ["refresh": String(Int(Date().timeIntervalSince1970 * 1000))]
+    }
+
     let request = NetworkRequest<[Personalized.Section]>(
       path: "/api/libraries/\(library.id)/personalized",
-      method: .get
+      method: .get,
+      query: query
     )
 
     do {

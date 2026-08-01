@@ -29,6 +29,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - For auth/server changes, inspect API services, OIDC flow, custom headers, watch connectivity, and logging together.
 - For UI changes, follow existing SwiftUI view/model structure and avoid broad restyling.
 - For library search changes, preserve server matches and use cached filter data only as a conservative fuzzy fallback.
+- Keep Home personalized-shelf loading independent from user progress synchronization so one failure cannot leave all shelves stale.
 
 ## Verification
 

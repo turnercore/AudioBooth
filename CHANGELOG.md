@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Search experience - Normalize whitespace, reduce input debounce, label close matches, and expose narrator search consistently
+- Home series shelf - Label the server's recent-series shelf as Recently Added Series
 
 ### Fixed
 - Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape
+- Home shelf freshness - App launch and pull-to-refresh now bypass stale personalized-shelf cache entries, and shelf loading no longer depends on progress synchronization succeeding
 
 ## [1.11.0]
 

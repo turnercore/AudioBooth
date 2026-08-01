@@ -4,6 +4,10 @@ import XCTest
 
 @MainActor
 final class HomePageLifecycleTests: XCTestCase {
+  func testRecentlyAddedSeriesUsesClearDisplayName() {
+    XCTAssertEqual(HomeSection.recentSeries.displayName, "Recently Added Series")
+  }
+
   func testRepeatedAppearancesStartAutomaticLoadingOnce() {
     final class Model: HomePage.Model {
       private(set) var startCount = 0

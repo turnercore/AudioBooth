@@ -58,7 +58,7 @@ final class HomePageModel: HomePage.Model {
 
   override func start() {
     Task {
-      await fetchContent()
+      await fetchContent(bypassingCache: true)
     }
 
     downloadManager.updateDownloadStates()
@@ -69,7 +69,7 @@ final class HomePageModel: HomePage.Model {
       _ = try? await Audiobookshelf.shared.libraries.fetchFilterData()
     }
     discoverBooks = []
-    await fetchContent()
+    await fetchContent(bypassingCache: true)
   }
 
   override func onReset(_ shouldRefresh: Bool) {
@@ -111,11 +111,11 @@ final class HomePageModel: HomePage.Model {
 }
 
 extension HomePageModel {
-  private func fetchContent() async {
-    async let pinnedPlaylistFetch = fetchPinnedPlaylist
-    async let remoteContentFetch = fetchRemoteContent
+  private func fetchContent(bypassingCache: Bool = false) async {
+    async let pinnedPlaylistFetch: Void = fetchPinnedPlaylist()
+    async let remoteContentFetch: Void = fetchRemoteContent(bypassingCache: bypassingCache)
 
-    _ = await [pinnedPlaylistFetch(), remoteContentFetch()]
+    _ = await (pinnedPlaylistFetch, remoteContentFetch)
   }
 
   private func fetchPinnedPlaylist() async {
@@ -455,7 +455,30 @@ extension HomePageModel {
     processSections(personalized.sections)
   }
 
-  private func fetchRemoteContent() async {
+  private func refreshUserData() async {
+    do {
+      let data = try await Audiobookshelf.shared.authentication.authorize()
+      try? MediaProgress.syncFromAPI(
+        userData: data.user,
+        currentPlayingBookID: PlayerManager.shared.current?.id
+      )
+      downloadManager.removeCompleted()
+      try? Bookmark.syncFromAPI(userData: data.user)
+      BookmarkSyncQueue.shared.syncPending()
+
+      let version = data.serverSettings.version
+      if version.compare("2.22.0", options: .numeric) == .orderedAscending {
+        error =
+          "Some features may be limited on server version \(version). For the best experience, please update your server."
+      } else {
+        error = nil
+      }
+    } catch {
+      AppLogger.viewModel.error("Failed to refresh user data: \(error)")
+    }
+  }
+
+  private func fetchRemoteContent(bypassingCache: Bool = false) async {
     guard Audiobookshelf.shared.libraries.current != nil, !isFetching else { return }
 
     isFetching = true
@@ -469,28 +492,18 @@ extension HomePageModel {
       isLoading = true
     }
 
+    async let userDataRefresh: Void = refreshUserData()
+
     do {
-      let data = try await Audiobookshelf.shared.authentication.authorize()
-      try? MediaProgress.syncFromAPI(
-        userData: data.user,
-        currentPlayingBookID: PlayerManager.shared.current?.id
+      let personalized = try await Audiobookshelf.shared.libraries.fetchPersonalized(
+        bypassingCache: bypassingCache
       )
-      downloadManager.removeCompleted()
-      try? Bookmark.syncFromAPI(userData: data.user)
-
-      BookmarkSyncQueue.shared.syncPending()
-
-      let version = data.serverSettings.version
-      if version.compare("2.22.0", options: .numeric) == .orderedAscending {
-        error =
-          "Some features may be limited on server version \(version). For the best experience, please update your server."
-      }
-
-      let personalized = try await Audiobookshelf.shared.libraries.fetchPersonalized()
       processSections(personalized.sections)
     } catch {
       AppLogger.viewModel.error("Failed to fetch personalized content: \(error)")
     }
+
+    await userDataRefresh
 
     Task {
       if let stats = try? await Audiobookshelf.shared.authentication.fetchListeningStats() {
