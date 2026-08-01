@@ -70,6 +70,7 @@ public final class ModelContextProvider {
       contexts[serverID] = container.mainContext
     }
     activeServerID = serverID
+    MediaProgress.reloadCache()
   }
 
   public func useInMemoryContainer(for serverID: String) throws {

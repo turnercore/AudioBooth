@@ -36,8 +36,8 @@ enum AppLogger {
 
   private static func configureNetworkLogger() {
     NetworkLogger.shared = NetworkLogger { config in
-      config.sensitiveHeaders = ["Authorization", "x-refresh-token"]
-      config.sensitiveQueryItems = ["token"]
+      config.sensitiveHeaders = ["Authorization", "x-refresh-token", "Cookie", "Set-Cookie"]
+      config.sensitiveQueryItems = ["token", "code", "code_verifier"]
       config.sensitiveDataFields = [
         "accessToken",
         "authOpenIDAuthorizationURL",
@@ -47,8 +47,10 @@ enum AppLogger {
         "authOpenIDTokenURL",
         "authOpenIDUserInfoURL",
         "email",
+        "password",
         "refreshToken",
         "token",
+        "username",
       ]
       config.willHandleEvent = { $0.redacted }
     }

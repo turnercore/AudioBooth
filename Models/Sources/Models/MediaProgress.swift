@@ -75,7 +75,7 @@ extension MediaProgress {
 
   public static func progress(for bookID: String) -> Double { cache[bookID, default: 0] }
 
-  public static func refreshCache() {
+  public static func reloadCache() {
     cache = initialize()
   }
 }

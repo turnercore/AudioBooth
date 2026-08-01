@@ -269,6 +269,11 @@ private extension AudioPlayer {
       && effectivePort(lhs) == effectivePort(rhs)
   }
 
+  func trackIndex(for item: AVPlayerItem) -> Int? {
+    guard let url = (item.asset as? AVURLAsset)?.url else { return nil }
+    return tracks.firstIndex { self.url(for: $0) == url }
+  }
+
   func applyEQToUpcoming() {
     guard eqEnabled else { return }
     Task { [weak self] in await self?.attachEQ() }
@@ -325,6 +330,9 @@ private extension AudioPlayer {
 
   func handleCurrentItemChange(_ item: AVPlayerItem?) {
     guard let item else { return }
+    if let index = trackIndex(for: item) {
+      currentTrackIndex = index
+    }
     AppLogger.player.debug("Now playing track \(self.currentTrackIndex)/\(self.tracks.count)")
     observeItem(item)
     topUpQueue()
@@ -356,8 +364,6 @@ private extension AudioPlayer {
         let remainingItems = self.player.items()
         if remainingItems.isEmpty || remainingItems == [item] {
           self.events.send(.finished)
-        } else {
-          self.currentTrackIndex += 1
         }
       }
       .store(in: &itemObservers)

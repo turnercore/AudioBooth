@@ -166,6 +166,9 @@ extension MediaProgress {
     let context = ModelContextProvider.shared.context
     let allLocalProgress = try MediaProgress.fetchAll()
     let remoteBookIDs = Set(userData.mediaProgress.map { $0.episodeId ?? $0.libraryItemId })
+    let pendingSessionBookIDs = Set(
+      (try? PlaybackSession.fetchUnsynced())?.map { $0.episodeID ?? $0.libraryItemID } ?? []
+    )
     var progressMap = Dictionary(uniqueKeysWithValues: allLocalProgress.map { ($0.bookID, $0) })
 
     AppLogger.session.debug(
@@ -187,11 +190,14 @@ extension MediaProgress {
       if let currentPlayingBookID, localProgress.bookID == currentPlayingBookID {
         continue
       }
+      if pendingSessionBookIDs.contains(localProgress.bookID) {
+        continue
+      }
       context.delete(localProgress)
     }
 
     try context.save()
-    MediaProgress.refreshCache()
+    MediaProgress.reloadCache()
   }
 
   private static func remoteValues(
