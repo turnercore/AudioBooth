@@ -26,6 +26,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - When changing token refresh, check `CredentialsActor`, `AuthenticationService`, and `NetworkService` together.
 - When changing request headers, check image loading, watch connectivity, and custom headers.
 - Keep local HTTP support intentional and visible; do not silently downgrade credentialed requests.
+- Rebuild the shared image pipeline when the active server or its custom headers change, while retaining the persistent image cache.
 - Preserve personalized-shelf caching by default; bypass it only for explicit freshness requests such as app start or pull-to-refresh.
 - When expanding the server's five-item Recent Series shelf, preserve its 60-day window and use the permission-aware series endpoint.
 

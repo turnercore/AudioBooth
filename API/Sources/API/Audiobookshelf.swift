@@ -26,15 +26,6 @@ public final class Audiobookshelf {
 
   private init() {
     setupNetworkService()
-
-    ImagePipeline.shared = ImagePipeline {
-      let configuration = DataLoader.defaultConfiguration
-      configuration.urlCache = nil
-      configuration.httpAdditionalHeaders = authentication.server?.customHeaders
-      $0.dataLoader = DataLoader(configuration: configuration)
-
-      $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.images")
-    }
   }
 
   public func logout(serverID: String) {
@@ -42,6 +33,8 @@ public final class Audiobookshelf {
   }
 
   func setupNetworkService() {
+    setupImagePipeline()
+
     guard let server = authentication.server else {
       networkService = nil
       return
@@ -60,6 +53,17 @@ public final class Audiobookshelf {
       var headers = await server.customHeaders
       headers["Authorization"] = credentials.bearer
       return headers
+    }
+  }
+
+  func setupImagePipeline() {
+    ImagePipeline.shared = ImagePipeline {
+      let configuration = DataLoader.defaultConfiguration
+      configuration.urlCache = nil
+      configuration.waitsForConnectivity = true
+      configuration.httpAdditionalHeaders = authentication.server?.customHeaders
+      $0.dataLoader = DataLoader(configuration: configuration)
+      $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.images")
     }
   }
 

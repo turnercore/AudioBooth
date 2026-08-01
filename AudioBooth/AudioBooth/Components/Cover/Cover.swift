@@ -1,4 +1,5 @@
 import Combine
+import Logging
 import NukeUI
 import SwiftUI
 
@@ -33,6 +34,11 @@ struct Cover: View {
           .aspectRatio(contentMode: .fit)
       } else {
         placeholder
+      }
+    }
+    .onCompletion { result in
+      if case .failure(let error) = result {
+        AppLogger.general.warning("Cover image request failed: \(error)")
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)

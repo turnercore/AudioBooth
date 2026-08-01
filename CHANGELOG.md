@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape
 - Home shelf freshness - App launch and pull-to-refresh now bypass stale personalized-shelf cache entries, and shelf loading no longer depends on progress synchronization succeeding
+- Library covers - Reconfigure image loading for the active server and custom proxy headers so uncached thumbnails do not silently fail
 
 ## [1.11.0]
 
