@@ -60,12 +60,15 @@ final class AuthorsPageModel: AuthorsPage.Model {
         return
       }
 
-      let authorCards = response.results.map { AuthorCardModel(author: $0) }
+      let authorCards = response.results
+        .map { AuthorCardModel(author: $0) }
+        .filter { $0.bookCount > 0 }
 
       allAuthors.append(contentsOf: authorCards)
       sections = buildSections(from: allAuthors)
       currentPage += 1
 
+      totalCount = response.total
       hasMorePages = (currentPage * itemsPerPage) < response.total
 
     } catch {

@@ -14,6 +14,7 @@ public final class LocalEpisode {
   public var coverURL: URL?
   public var track: Track?
   public var chapters: [Chapter]
+  public var createdAt: Date = Date()
 
   public var isDownloaded: Bool { track?.relativePath != nil }
 
@@ -50,7 +51,8 @@ public final class LocalEpisode {
     publishedAt: Date? = nil,
     coverURL: URL? = nil,
     track: Track? = nil,
-    chapters: [Chapter] = []
+    chapters: [Chapter] = [],
+    createdAt: Date = Date()
   ) {
     self.episodeID = episodeID
     self.podcast = podcast
@@ -63,6 +65,7 @@ public final class LocalEpisode {
     self.coverURL = coverURL
     self.track = track
     self.chapters = chapters
+    self.createdAt = createdAt
   }
 }
 

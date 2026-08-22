@@ -1,6 +1,7 @@
 import API
 import Combine
 import Foundation
+import Network
 import SwiftUI
 
 final class UserPreferences: ObservableObject {
@@ -59,6 +60,9 @@ final class UserPreferences: ObservableObject {
 
   @AppStorage("timerFadeOut")
   var timerFadeOut: Double = 30.0
+
+  @AppStorage("timerPauseBehavior")
+  var timerPauseBehavior: TimerPauseBehavior = .none
 
   @AppStorage("alarmFadeOut")
   var alarmFadeOut: Double = 10.0
@@ -167,6 +171,9 @@ final class UserPreferences: ObservableObject {
 
   @AppStorage("autoTimerWindowEnd")
   var autoTimerWindowEnd: Int = 6 * 60
+
+  @AppStorage("autoTimerTrigger")
+  var autoTimerTrigger: AutoTimerTrigger = .timeWindow
 
   @AppStorage("playerOrientation")
   var playerOrientation: PlayerOrientation = .auto
@@ -346,6 +353,14 @@ enum AutoDownloadMode: String, CaseIterable, Codable {
     case .wifiAndCellular: "Wi-Fi & Cellular"
     }
   }
+
+  var isNetworkAllowed: Bool {
+    switch self {
+    case .off: false
+    case .wifiOnly: NetworkMonitor.shared.interfaceType == .wifi
+    case .wifiAndCellular: NetworkMonitor.shared.isConnected
+    }
+  }
 }
 
 enum AutoDownloadDelay: Int, CaseIterable {
@@ -449,6 +464,45 @@ extension AutoTimerMode: RawRepresentable {
       return "duration:\(duration)"
     case .chapters(let count):
       return "chapters:\(count)"
+    }
+  }
+}
+
+enum AutoTimerTrigger: String, CaseIterable {
+  case timeWindow
+  case focus
+  case either
+
+  var displayText: LocalizedStringResource {
+    switch self {
+    case .timeWindow: "Time Window"
+    case .focus: "Focus"
+    case .either: "Either"
+    }
+  }
+}
+
+enum TimerPauseBehavior: String, CaseIterable {
+  case none
+  case pause
+  case reset
+  case off
+
+  var displayText: LocalizedStringResource {
+    switch self {
+    case .none: "None"
+    case .pause: "Pause"
+    case .reset: "Reset"
+    case .off: "Off"
+    }
+  }
+
+  var explanation: LocalizedStringResource {
+    switch self {
+    case .none: "Timer keeps counting down while playback is paused."
+    case .pause: "Timer pauses with playback and resumes on play."
+    case .reset: "Timer stops with playback and restarts in full on play."
+    case .off: "Pausing playback turns the sleep timer off."
     }
   }
 }

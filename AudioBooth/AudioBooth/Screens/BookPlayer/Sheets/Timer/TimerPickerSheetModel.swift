@@ -280,6 +280,21 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   private func updateSleepTimer() {
+    if !player.isPlaying {
+      switch preferences.timerPauseBehavior {
+      case .none:
+        break
+      case .pause:
+        return
+      case .reset:
+        resetTimerToOriginalDuration()
+        return
+      case .off:
+        cancelTimerForPause()
+        return
+      }
+    }
+
     switch current {
     case .preset(let seconds):
       if seconds > 1 {
@@ -435,14 +450,37 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
   func activateAutoTimerIfNeeded() {
     let mode = preferences.autoTimerMode
+    let trigger = preferences.autoTimerTrigger
 
-    guard mode != .off,
+    guard mode != .off, current == .none else { return }
+
+    if trigger != .focus, isInAutoTimerWindow() {
+      startAutoTimer(mode: mode)
+      return
+    }
+
+    guard trigger != .timeWindow else { return }
+
+    Task { [weak self] in
+      guard await FocusFilterIntent.isActive else { return }
+      guard let self, self.current == .none else { return }
+      self.startAutoTimer(mode: self.preferences.autoTimerMode)
+    }
+  }
+
+  func activateFocusTimer() {
+    guard preferences.autoTimerMode != .off,
       current == .none,
-      isInAutoTimerWindow()
+      player.isPlaying
     else {
       return
     }
 
+    AppLogger.player.info("Focus enabled during playback - starting auto-timer")
+    startAutoTimer(mode: preferences.autoTimerMode)
+  }
+
+  private func startAutoTimer(mode: AutoTimerMode) {
     let position = player.time
 
     switch mode {
@@ -461,6 +499,35 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
       AppLogger.player.info("Auto-timer activated: \(count) chapters")
 
     case .off:
+      break
+    }
+  }
+
+  private func resetTimerToOriginalDuration() {
+    guard originalTimerDuration > 0 else { return }
+
+    switch current {
+    case .preset(let seconds):
+      guard seconds != originalTimerDuration else { return }
+      current = .preset(originalTimerDuration)
+    case .custom(let seconds):
+      guard seconds != originalTimerDuration else { return }
+      current = .custom(originalTimerDuration)
+    case .chapters, .atTime, .duration, .none:
+      return
+    }
+
+    player.volume = Float(preferences.volumeLevel)
+    pauseLiveActivity()
+  }
+
+  private func cancelTimerForPause() {
+    switch current {
+    case .preset, .custom:
+      current = .none
+      stopSleepTimer()
+      player.volume = Float(preferences.volumeLevel)
+    case .chapters, .atTime, .duration, .none:
       break
     }
   }
@@ -700,10 +767,15 @@ extension TimerPickerSheetViewModel {
     let remainingTime: TimeInterval
     if let remaining {
       remainingTime = remaining
-    } else if case .chapters(let count) = current {
-      remainingTime = calculateChapterDuration(for: count) ?? 0
     } else {
-      remainingTime = 0
+      switch current {
+      case .preset(let seconds), .custom(let seconds):
+        remainingTime = seconds
+      case .chapters(let count):
+        remainingTime = calculateChapterDuration(for: count) ?? 0
+      case .atTime, .duration, .none:
+        remainingTime = 0
+      }
     }
 
     let state = SleepTimerActivityAttributes.ContentState(

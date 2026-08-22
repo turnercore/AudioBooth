@@ -13,6 +13,7 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 ## Local Contracts
 
 - Treat SwiftData persistence changes as data-loss sensitive.
+- `DownloadRequest` persists queued/retryable download intent and failure state; keep it credential-free and schema-migrated.
 - Do not delete or recreate persistent stores without preserving recoverable data first.
 - Save/delete helpers that declare `throws` should surface `context.save()` failures instead of swallowing them.
 - Do not import `API` or add remote DTO mapping here; keep DTO-to-local mapping in app-side adapter code.

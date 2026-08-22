@@ -13,6 +13,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 ## Local Contracts
 
 - Treat auth, watch sync, downloads, SwiftData, and app-group files as high-risk paths.
+- Keep queued and retryable downloads represented by persisted `DownloadRequest` records; URLSession task descriptions identify relative app-group paths and must not contain credentials.
 - Do not persist auth tokens or custom secret headers in plaintext storage unless an existing platform constraint forces it and the risk is documented.
 - Keep expensive filesystem and SwiftData work off the main actor where possible.
 - Do not commit `AudioBooth/Local.xcconfig`.
@@ -25,7 +26,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 ## Work Guidance
 
 - For playback changes, inspect `PlayerManager`, `BookPlayerModel`, `SessionManager`, widgets, and watch sync call sites before editing.
-- For downloads/offline changes, inspect `DownloadManager`, `StorageManager`, local SwiftData models, and app-group paths together.
+- For downloads/offline changes, inspect `DownloadManager`, `DownloadRequest`, `StorageManager`, local media models, and app-group paths together; verify foreground/network resume and background task reattachment.
 - For auth/server changes, inspect API services, OIDC flow, custom headers, watch connectivity, and logging together.
 - For UI changes, follow existing SwiftUI view/model structure and avoid broad restyling.
 - For library search changes, preserve server matches and use cached filter data only as a conservative fuzzy fallback.

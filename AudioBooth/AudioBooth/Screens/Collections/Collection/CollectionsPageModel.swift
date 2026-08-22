@@ -10,6 +10,8 @@ final class CollectionsPageModel: CollectionsPage.Model {
   private var isLoadingNextPage: Bool = false
   private let itemsPerPage: Int = 20
   private var loadTask: Task<Void, Never>?
+  private var needsReload: Bool = true
+  private var cancellables = Set<AnyCancellable>()
 
   init(mode: CollectionMode) {
     let permissions = Audiobookshelf.shared.authentication.server?.permissions
@@ -24,9 +26,24 @@ final class CollectionsPageModel: CollectionsPage.Model {
     }
 
     super.init(mode: mode, canDelete: canDelete)
+
+    didChange
+      .sink { [weak self] _ in self?.needsReload = true }
+      .store(in: &cancellables)
+  }
+
+  private var didChange: PassthroughSubject<Void, Never> {
+    switch mode {
+    case .playlists:
+      audiobookshelf.playlists.didChange
+    case .collections:
+      audiobookshelf.collections.didChange
+    }
   }
 
   override func onAppear() {
+    guard needsReload else { return }
+
     Task {
       await refresh()
     }
@@ -38,6 +55,7 @@ final class CollectionsPageModel: CollectionsPage.Model {
     isLoadingNextPage = false
     currentPage = 0
     hasMorePages = false
+    needsReload = false
     await loadCollections()
   }
 
@@ -96,6 +114,7 @@ final class CollectionsPageModel: CollectionsPage.Model {
           CollectionRowModel(collection: playlist)
         }
 
+        totalCount = response.total
         hasMorePages = (currentPage + 1) * itemsPerPage < response.total
 
       case .collections:
@@ -114,6 +133,7 @@ final class CollectionsPageModel: CollectionsPage.Model {
           CollectionRowModel(collection: collection)
         }
 
+        totalCount = response.total
         hasMorePages = (currentPage + 1) * itemsPerPage < response.total
       }
 
@@ -134,6 +154,7 @@ final class CollectionsPageModel: CollectionsPage.Model {
       pageLoadFailed = true
       if currentPage == 0 {
         collections = []
+        needsReload = true
       }
     }
 

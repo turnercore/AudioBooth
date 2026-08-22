@@ -9,15 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Fuzzy author and narrator search - Suggest close name matches for misspelled searches
+- Total counts - Show total item counts on the library, authors, series, and collections pages
+- Sleep timer Focus intent - Activate the auto sleep timer using a Focus (thanks @fivezeroes)
+- Sleep timer pause behavior - Configurable sleep timer behavior when playback is paused (thanks @fivezeroes)
 
 ### Changed
 - Search experience - Normalize whitespace, reduce input debounce, label close matches, and expose narrator search consistently
 - Home shelves - Show up to 20 Recently Added books and Recent Series while preserving the server's recent-series rules
+- Downloads revamp - Full revamp of how downloads are handled, with improved multi-track and background downloads, the ability to resume failed downloads, and better overall stability
+- Podcast episode download indicator - Improved visibility of the download indicator
+- Adaptive sheets - Now scroll to support large font sizes
+- Mac Catalyst sheets - Added a close button to adaptive sheets (thanks @kornelko2)
+- Player - Now closes when a finished book has nothing to play next (thanks @kornelko2)
+- Multitrack audio - Improved audio player handling of multitrack books
 
 ### Fixed
 - Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape
 - Home shelf freshness - App launch and pull-to-refresh now bypass stale personalized-shelf cache entries, and shelf loading no longer depends on progress synchronization succeeding
 - Library covers - Reconfigure image loading for the active server and custom proxy headers so uncached thumbnails do not silently fail
+- Multi-file downloads - Fixed background downloads for books with multiple files (thanks @cbzehner)
+- Series card covers - Fixed a layout issue with series card covers
+- Series, genre, and tag lists - Fixed list content being hidden behind the mini player (thanks @kornelko2)
+- Authors list - Fixed authors with zero books appearing in the list (thanks @kornelko2)
+- Collection page - Fixed various issues on the collection page
+- Media progress - Fixed media progress edge cases
 
 ## [1.11.0]
 

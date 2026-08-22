@@ -35,7 +35,7 @@ final class SeriesPageModel: SeriesPage.Model {
   }
 
   override func onAppear() {
-    guard loadTask == nil else { return }
+    guard series.isEmpty, loadTask == nil else { return }
     loadTask = Task {
       await loadSeries()
     }
@@ -87,6 +87,7 @@ final class SeriesPageModel: SeriesPage.Model {
       self.series = fetchedSeries
       currentPage += 1
 
+      totalCount = response.total
       self.hasMorePages = (currentPage * itemsPerPage) < response.total
 
     } catch {
