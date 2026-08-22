@@ -139,16 +139,23 @@ final class DownloadManager: NSObject, ObservableObject {
   }
 
   func reattachInFlightDownloads() async {
-    guard active == nil else { return }
+    guard active == nil,
+      let serverID = Audiobookshelf.shared.authentication.server?.id,
+      ModelContextProvider.shared.activeServerID == serverID
+    else { return }
 
     let tasks = await session.allTasks.compactMap { $0 as? URLSessionDownloadTask }
 
-    guard active == nil, !isPreparing else { return }
+    guard active == nil, !isPreparing,
+      Audiobookshelf.shared.authentication.server?.id == serverID,
+      ModelContextProvider.shared.activeServerID == serverID
+    else { return }
 
     var byItem: [String: [URLSessionDownloadTask]] = [:]
     for task in tasks {
       guard
         let path = task.taskDescription,
+        path.split(separator: "/").first.map(String.init) == serverID,
         let itemID = Self.itemID(fromRelativePath: path)
       else { continue }
       byItem[itemID, default: []].append(task)
@@ -225,7 +232,10 @@ final class DownloadManager: NSObject, ObservableObject {
   }
 
   func resumeOutstandingRequests() {
-    guard NetworkMonitor.shared.interfaceType == .wifi else { return }
+    guard NetworkMonitor.shared.interfaceType == .wifi,
+      let serverID = Audiobookshelf.shared.authentication.server?.id,
+      ModelContextProvider.shared.activeServerID == serverID
+    else { return }
     startNextIfIdle()
   }
 
@@ -656,6 +666,18 @@ final class DownloadManager: NSObject, ObservableObject {
       deleteRequest(for: itemID)
       Toast(success: "Download completed").show()
       AppLogger.download.info("Download completed for book: \(itemID)")
+
+      if currentKind != .episode,
+        let serverID = Audiobookshelf.shared.authentication.server?.id
+      {
+        Task {
+          guard Audiobookshelf.shared.authentication.server?.id == serverID,
+            ModelContextProvider.shared.activeServerID == serverID,
+            let book = try? LocalBook.fetch(bookID: itemID)
+          else { return }
+          await LocalPlaybackTimelineReconciler.reconcile(book: book)
+        }
+      }
     } else if let request, currentKind == kind {
       request.failureCount += 1
       try? request.save()

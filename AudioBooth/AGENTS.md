@@ -14,6 +14,8 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 
 - Treat auth, watch sync, downloads, SwiftData, and app-group files as high-risk paths.
 - Keep queued and retryable downloads represented by persisted `DownloadRequest` records; URLSession task descriptions identify relative app-group paths and must not contain credentials.
+- Reconcile downloaded audiobook track offsets and duration from the local assets before local playback; server estimates must not leave offline progress on a different timeline.
+- Resuming after a completed sleep timer clears it without implicitly extending or auto-rearming it; extension remains an explicit alert or shake action.
 - Do not persist auth tokens or custom secret headers in plaintext storage unless an existing platform constraint forces it and the risk is documented.
 - Keep expensive filesystem and SwiftData work off the main actor where possible.
 - Do not commit `AudioBooth/Local.xcconfig`.

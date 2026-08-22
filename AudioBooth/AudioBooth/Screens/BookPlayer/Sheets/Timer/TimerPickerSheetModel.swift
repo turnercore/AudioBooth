@@ -22,6 +22,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   private var alarmTimer: Timer?
   private var alarmSoundPlayer: AVAudioPlayer?
   private var originalTimerDuration: TimeInterval = 0
+  private var suppressAutoTimerActivation = false
   private var lastObservedChapterIndex: Int = 0
   private var cancellables = Set<AnyCancellable>()
   private var liveActivityCleanupTask: Task<Void, Never>?
@@ -193,6 +194,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   override func onOffSelected() {
+    suppressAutoTimerActivation = true
     selected = .none
     current = .none
     completedAlert = nil
@@ -203,6 +205,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   override func onStartTimerTapped() {
+    suppressAutoTimerActivation = false
     current = selected
     switch selected {
     case .preset(let duration):
@@ -256,6 +259,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
   private func startSleepTimer(duration: TimeInterval) {
     stopSleepTimer()
+    suppressAutoTimerActivation = false
     originalTimerDuration = duration
 
     sleepTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -326,6 +330,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
   private func pauseFromTimer() {
     let duration = originalTimerDuration
+    suppressAutoTimerActivation = true
 
     PlaybackHistory.record(itemID: itemID, action: .timerCompleted, position: player.time)
     player.pause()
@@ -381,6 +386,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   private func resetTimerFromAlert() {
+    suppressAutoTimerActivation = true
     completedAlert = nil
     current = .none
     sleepTimer?.invalidate()
@@ -394,6 +400,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   func pauseFromChapterTimer() {
+    suppressAutoTimerActivation = true
     PlaybackHistory.record(itemID: itemID, action: .timerCompleted, position: player.time)
     player.pause()
 
@@ -448,11 +455,17 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     }
   }
 
+  func onPlaybackResumeRequested() {
+    guard suppressAutoTimerActivation else { return }
+    resetTimerFromAlert()
+    AppLogger.player.info("Cleared sleep timer state before resuming playback")
+  }
+
   func activateAutoTimerIfNeeded() {
     let mode = preferences.autoTimerMode
     let trigger = preferences.autoTimerTrigger
 
-    guard mode != .off, current == .none else { return }
+    guard mode != .off, current == .none, !suppressAutoTimerActivation else { return }
 
     if trigger != .focus, isInAutoTimerWindow() {
       startAutoTimer(mode: mode)
@@ -463,7 +476,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
     Task { [weak self] in
       guard await FocusFilterIntent.isActive else { return }
-      guard let self, self.current == .none else { return }
+      guard let self, self.current == .none, !self.suppressAutoTimerActivation else { return }
       self.startAutoTimer(mode: self.preferences.autoTimerMode)
     }
   }
@@ -471,6 +484,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   func activateFocusTimer() {
     guard preferences.autoTimerMode != .off,
       current == .none,
+      !suppressAutoTimerActivation,
       player.isPlaying
     else {
       return
@@ -481,6 +495,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   private func startAutoTimer(mode: AutoTimerMode) {
+    suppressAutoTimerActivation = false
     let position = player.time
 
     switch mode {

@@ -89,6 +89,17 @@ extension SessionManager {
     }
 
     if let item, item.isDownloaded, !forceTranscode {
+      if let book = item as? LocalBook {
+        guard let serverID = Audiobookshelf.shared.authentication.server?.id,
+          ModelContextProvider.shared.activeServerID == serverID
+        else { throw SessionError.failedToCreateSession }
+
+        await LocalPlaybackTimelineReconciler.reconcile(book: book, mediaProgress: mediaProgress)
+        guard Audiobookshelf.shared.authentication.server?.id == serverID,
+          ModelContextProvider.shared.activeServerID == serverID
+        else { throw SessionError.failedToCreateSession }
+      }
+
       startLocalSession(
         libraryItemID: itemID,
         episodeID: episodeID,
