@@ -147,9 +147,23 @@ final class WatchFileTransferCoordinator {
   }
 
   func queueTransfer(bookID: String, session: WCSession) async {
-    // This build uses the official opportunistic transferFile queue as the
-    // primary transport. Share-based downloads remain implemented but are not
-    // requested; outstanding temporary shares are revoked for hygiene.
+    // Primary: share-based background URLSession; fallback is chunked transferFile.
+    if let book = try? LocalBook.fetch(bookID: bookID) {
+      await LocalPlaybackTimelineReconciler.reconcile(book: book)
+    }
+    do {
+      let offer = try await prepareShareOffer(bookID: bookID)
+      session.transferUserInfo([
+        "command": "watchShareOffer",
+        "offer": try Self.binaryPropertyListData(offer),
+      ])
+      return
+    } catch {
+      AppLogger.watchConnectivity.warning(
+        "Share offer failed, falling back to chunked transferFile: \(error.localizedDescription)"
+      )
+    }
+
     await revokeAllOwnedShares()
     retireStaleJobs(bookID: bookID)
 
