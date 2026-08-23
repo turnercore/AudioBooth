@@ -13,7 +13,7 @@ final class ContinueListeningRowModel: ContinueListeningRow.Model {
       id: book.id,
       title: book.title,
       author: book.authorName,
-      coverURL: book.coverURL,
+      coverURL: book.preferredCoverURL,
       timeRemaining: timeRemainingText
     )
   }

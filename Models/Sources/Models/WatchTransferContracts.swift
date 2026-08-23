@@ -288,9 +288,9 @@ public struct WatchTransferReceipt: Codable, Equatable, Sendable {
   public private(set) var receivedCover: Bool
 
   public var receivedTrackIndexes: [Int] { receivedIndexes.sorted() }
+  /// Artwork is best-effort; validated audio tracks alone complete an offline transfer.
   public var isComplete: Bool {
     Set(manifest.tracks.map(\.index)).isSubset(of: receivedIndexes)
-      && (!manifest.expectsCover || receivedCover)
   }
 
   public init(
@@ -1026,4 +1026,641 @@ public enum WatchTransferValidationError: Error, Equatable, Sendable {
   case chunkOffsetMismatch(expected: Int64, actual: Int64)
   case digestMismatch(expected: String, actual: String)
   case invalidReceivedState
+}
+
+/// The public, credential-free description of one track in a temporary share.
+public struct WatchShareTrackDescriptor: Codable, Equatable, Hashable, Sendable, Identifiable {
+  public let index: Int
+  public let byteCount: Int64
+  public let fileExtension: String
+  public let integrity: WatchTransferIntegrity?
+
+  public var id: Int { index }
+
+  public init(
+    index: Int,
+    byteCount: Int64,
+    fileExtension: String,
+    integrity: WatchTransferIntegrity? = nil
+  ) {
+    self.index = index
+    self.byteCount = byteCount
+    self.fileExtension = fileExtension
+    self.integrity = integrity
+  }
+
+  public init(
+    index: Int,
+    byteCount: Int64,
+    fileExtension: String,
+    sha256: String
+  ) {
+    self.init(
+      index: index,
+      byteCount: byteCount,
+      fileExtension: fileExtension,
+      integrity: WatchTransferIntegrity(sha256: sha256, byteCount: byteCount)
+    )
+  }
+
+  public var isWellFormed: Bool {
+    index >= 0
+      && byteCount >= 0
+      && !fileExtension.isEmpty
+      && !fileExtension.contains("/")
+      && !fileExtension.contains("\\")
+      && (integrity == nil || integrity?.byteCount == byteCount)
+  }
+
+  public func validate(data: Data) -> WatchTransferValidationError? {
+    guard isWellFormed else { return .invalidDescriptor }
+    guard Int64(data.count) == byteCount else {
+      return .sizeMismatch(expected: byteCount, actual: Int64(data.count))
+    }
+    return integrity?.validate(data: data)
+  }
+
+  public func isValid(data: Data) -> Bool {
+    validate(data: data) == nil
+  }
+}
+
+public enum WatchShareOfferValidationError: Error, Equatable, Sendable {
+  case emptyIdentifier
+  case invalidBootstrapURL
+  case nonHTTPSBootstrapURL
+  case privateOrTailscaleBootstrapAddress
+  case bootstrapURLContainsCredentials
+  case bootstrapURLContainsQuery
+  case bootstrapURLContainsFragment
+  case expired
+  case unboundedExpiry
+  case invalidReplacementGeneration
+  case noTracks
+  case duplicateTrackIndex(Int)
+  case invalidTrack(Int)
+}
+
+private enum WatchShareBootstrapURLValidator {
+  static func validate(_ url: URL) -> WatchShareOfferValidationError? {
+    guard
+      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+      let scheme = components.scheme?.lowercased(),
+      let host = components.host?.lowercased(),
+      !host.isEmpty
+    else {
+      return .invalidBootstrapURL
+    }
+
+    guard scheme == "https" else { return .nonHTTPSBootstrapURL }
+    guard components.user == nil, components.password == nil else {
+      return .bootstrapURLContainsCredentials
+    }
+    guard components.query == nil else { return .bootstrapURLContainsQuery }
+    guard components.fragment == nil else { return .bootstrapURLContainsFragment }
+    guard !isPrivateOrTailscaleAddress(host) else {
+      return .privateOrTailscaleBootstrapAddress
+    }
+    return nil
+  }
+
+  private static func isPrivateOrTailscaleAddress(_ host: String) -> Bool {
+    let host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).trimmedDot
+    if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") {
+      return true
+    }
+
+    // URLComponents leaves IPv6 literals containing colons. Rejecting all literal
+    // IPv6 addresses keeps the public contract hostname-based and avoids local ranges.
+    if host.contains(":") { return true }
+
+    let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+    guard octets.count == 4 else { return false }
+    let values = octets.compactMap { Int($0) }
+    guard values.count == 4, values.allSatisfy({ (0...255).contains($0) }) else {
+      return false
+    }
+
+    switch values {
+    case let values where values[0] == 0 || values[0] == 10 || values[0] == 127:
+      return true
+    case let values where values[0] == 100 && (64...127).contains(values[1]):
+      return true  // RFC 6598, including Tailscale's 100.64.0.0/10 addresses.
+    case let values where values[0] == 169 && values[1] == 254:
+      return true
+    case let values where values[0] == 172 && (16...31).contains(values[1]):
+      return true
+    case let values where values[0] == 192 && values[1] == 168:
+      return true
+    default:
+      return false
+    }
+  }
+}
+
+private extension String {
+  var trimmedDot: String {
+    hasSuffix(".") ? String(dropLast()) : self
+  }
+}
+
+/// A temporary public Audiobookshelf share. The URL is the public bootstrap URL,
+/// which may contain a hostname and server base path but never credentials or headers.
+public struct WatchShareOffer: Codable, Equatable, Sendable, Identifiable {
+  /// Shares live for at most one week in the client contract.
+  public static let maximumLifetime: TimeInterval = 7 * 24 * 60 * 60
+
+  public let transferID: String
+  public let bookID: String
+  public let shareID: String
+  public let publicBootstrapURL: URL
+  public let expiresAt: Date
+  public let tracks: [WatchShareTrackDescriptor]
+  public let replacementGeneration: Int
+
+  public var id: String { transferID }
+  public var bootstrapURL: URL { publicBootstrapURL }
+  public var expectedTrackIndexes: [Int] { tracks.map(\.index) }
+
+  public init(
+    transferID: String,
+    bookID: String,
+    shareID: String,
+    publicBootstrapURL: URL,
+    expiresAt: Date,
+    tracks: [WatchShareTrackDescriptor],
+    replacementGeneration: Int = 0
+  ) {
+    self.transferID = transferID
+    self.bookID = bookID
+    self.shareID = shareID
+    self.publicBootstrapURL = publicBootstrapURL
+    self.expiresAt = expiresAt
+    self.tracks = tracks.sorted { $0.index < $1.index }
+    self.replacementGeneration = replacementGeneration
+  }
+
+  public var isExpired: Bool { isExpired(at: Date()) }
+
+  public func isExpired(at date: Date) -> Bool {
+    date >= expiresAt
+  }
+
+  public func validationError(at date: Date = Date()) -> WatchShareOfferValidationError? {
+    guard !transferID.isEmpty, !bookID.isEmpty, !shareID.isEmpty else {
+      return .emptyIdentifier
+    }
+    if let urlError = WatchShareBootstrapURLValidator.validate(publicBootstrapURL) {
+      return urlError
+    }
+    guard expiresAt.timeIntervalSince1970.isFinite, expiresAt.timeIntervalSince1970 > 0 else {
+      return .unboundedExpiry
+    }
+    let lifetime = expiresAt.timeIntervalSince(date)
+    guard lifetime > 0 else { return .expired }
+    guard lifetime <= Self.maximumLifetime else { return .unboundedExpiry }
+    guard replacementGeneration >= 0 else { return .invalidReplacementGeneration }
+    guard !tracks.isEmpty else { return .noTracks }
+
+    var indexes = Set<Int>()
+    for track in tracks {
+      guard track.isWellFormed else { return .invalidTrack(track.index) }
+      guard indexes.insert(track.index).inserted else {
+        return .duplicateTrackIndex(track.index)
+      }
+    }
+    return nil
+  }
+
+  public func isValid(at date: Date = Date()) -> Bool {
+    validationError(at: date) == nil
+  }
+
+  /// Replaces only the public share. Completed tracks can be reused when their
+  /// descriptor is unchanged, while partial ranges are discarded by the lifecycle.
+  public func replacing(
+    shareID: String,
+    publicBootstrapURL: URL,
+    expiresAt: Date,
+    tracks: [WatchShareTrackDescriptor]? = nil
+  ) -> Self {
+    Self(
+      transferID: transferID,
+      bookID: bookID,
+      shareID: shareID,
+      publicBootstrapURL: publicBootstrapURL,
+      expiresAt: expiresAt,
+      tracks: tracks ?? self.tracks,
+      replacementGeneration: replacementGeneration + 1
+    )
+  }
+}
+
+/// The server validators and contiguous prefix needed to resume one track with a range request.
+public struct WatchShareResumeMetadata: Codable, Equatable, Sendable {
+  public let receivedByteCount: Int64
+  public let totalByteCount: Int64
+  public let entityTag: String?
+  public let lastModified: Date?
+
+  public var isPartial: Bool {
+    receivedByteCount > 0 && receivedByteCount < totalByteCount
+  }
+
+  public var rangeHeader: String? {
+    guard isPartial else { return nil }
+    return "bytes=\(receivedByteCount)-"
+  }
+
+  public init(
+    receivedByteCount: Int64,
+    totalByteCount: Int64,
+    entityTag: String? = nil,
+    lastModified: Date? = nil
+  ) {
+    self.receivedByteCount = receivedByteCount
+    self.totalByteCount = totalByteCount
+    self.entityTag = entityTag
+    self.lastModified = lastModified
+  }
+
+  public func validationError(
+    against track: WatchShareTrackDescriptor
+  ) -> WatchTransferValidationError? {
+    guard
+      track.isWellFormed,
+      totalByteCount == track.byteCount,
+      receivedByteCount >= 0,
+      receivedByteCount <= totalByteCount
+    else {
+      return .invalidDescriptor
+    }
+    return nil
+  }
+}
+
+public enum WatchShareTrackReceiptState: String, Codable, Equatable, Sendable {
+  case partial
+  case completed
+}
+
+public enum WatchShareReceiptResult: String, Codable, Equatable, Sendable {
+  case accepted
+  case duplicate
+  case rejected
+}
+
+/// A persisted receipt for one public track. A completed receipt is safe to reuse
+/// after share replacement only when its descriptor still matches.
+public struct WatchShareTrackReceipt: Codable, Equatable, Sendable, Identifiable {
+  public let track: WatchShareTrackDescriptor
+  public let replacementGeneration: Int
+  public private(set) var state: WatchShareTrackReceiptState
+  public private(set) var resumeMetadata: WatchShareResumeMetadata?
+
+  public var id: Int { track.index }
+  public var trackIndex: Int { track.index }
+  public var isComplete: Bool { state == .completed }
+
+  fileprivate init(
+    track: WatchShareTrackDescriptor,
+    state: WatchShareTrackReceiptState,
+    resumeMetadata: WatchShareResumeMetadata?,
+    replacementGeneration: Int
+  ) {
+    self.track = track
+    self.state = state
+    self.resumeMetadata = resumeMetadata
+    self.replacementGeneration = replacementGeneration
+  }
+}
+
+public enum WatchShareLifecycleState: String, Codable, Equatable, Sendable {
+  case offered
+  case bootstrapping
+  case downloading
+  case completed
+  case expired
+  case cancelled
+  case failed
+
+  public var isTerminal: Bool {
+    switch self {
+    case .completed, .expired, .cancelled, .failed: return true
+    case .offered, .bootstrapping, .downloading: return false
+    }
+  }
+}
+
+/// The cleanup work an authenticated iPhone may perform after a terminal job.
+/// It contains identifiers only. It never carries the URL, a token, or headers.
+public struct WatchShareCleanup: Codable, Equatable, Sendable {
+  public let transferID: String
+  public let bookID: String
+  public let shareID: String
+  public let removeActiveURL: Bool
+  public let revokeShare: Bool
+  public let removePartialTrackFiles: Bool
+  public let retainValidatedTrackFiles: Bool
+
+  public init(
+    transferID: String,
+    bookID: String,
+    shareID: String,
+    removeActiveURL: Bool = true,
+    revokeShare: Bool = true,
+    removePartialTrackFiles: Bool,
+    retainValidatedTrackFiles: Bool = true
+  ) {
+    self.transferID = transferID
+    self.bookID = bookID
+    self.shareID = shareID
+    self.removeActiveURL = removeActiveURL
+    self.revokeShare = revokeShare
+    self.removePartialTrackFiles = removePartialTrackFiles
+    self.retainValidatedTrackFiles = retainValidatedTrackFiles
+  }
+}
+
+/// Pure persisted state for one temporary-share download.
+public struct WatchShareLifecycle: Codable, Equatable, Sendable, Identifiable {
+  public let transferID: String
+  public let bookID: String
+  public private(set) var state: WatchShareLifecycleState
+  public private(set) var activeOffer: WatchShareOffer?
+  public private(set) var lastShareID: String
+  public private(set) var replacementGeneration: Int
+  public private(set) var receipts: [WatchShareTrackReceipt]
+
+  public var id: String { transferID }
+  public var activeURL: URL? { activeOffer?.publicBootstrapURL }
+  public var completedTrackIndexes: [Int] {
+    receipts.filter(\.isComplete).map(\.trackIndex).sorted()
+  }
+  public var missingTrackIndexes: [Int] {
+    guard let activeOffer else { return [] }
+    let completed = Set(completedTrackIndexes)
+    return activeOffer.tracks.map(\.index).filter { !completed.contains($0) }
+  }
+  public var isComplete: Bool {
+    guard let activeOffer else { return false }
+    return !activeOffer.tracks.isEmpty && missingTrackIndexes.isEmpty
+  }
+  public var reusableCompletedTrackIndexes: [Int] {
+    guard let activeOffer else { return [] }
+    let receiptsByIndex = Dictionary(uniqueKeysWithValues: receipts.map { ($0.trackIndex, $0) })
+    return activeOffer.tracks.compactMap { track in
+      guard let receipt = receiptsByIndex[track.index], receipt.isComplete,
+        receipt.track == track
+      else { return nil }
+      return track.index
+    }
+  }
+  public var cleanupPlan: WatchShareCleanup? {
+    guard state.isTerminal else { return nil }
+    return WatchShareCleanup(
+      transferID: transferID,
+      bookID: bookID,
+      shareID: lastShareID,
+      removePartialTrackFiles: state != .completed,
+      retainValidatedTrackFiles: state == .completed
+    )
+  }
+
+  public init(offer: WatchShareOffer) {
+    self.transferID = offer.transferID
+    self.bookID = offer.bookID
+    self.state = .offered
+    self.activeOffer = offer
+    self.lastShareID = offer.shareID
+    self.replacementGeneration = offer.replacementGeneration
+    self.receipts = []
+  }
+
+  public mutating func beginBootstrap(at date: Date = Date()) -> Bool {
+    guard state == .offered, let activeOffer, activeOffer.isValid(at: date) else { return false }
+    state = .bootstrapping
+    return true
+  }
+
+  public mutating func beginDownload(at date: Date = Date()) -> Bool {
+    guard state == .offered || state == .bootstrapping,
+      let activeOffer,
+      activeOffer.isValid(at: date)
+    else { return false }
+    state = .downloading
+    return true
+  }
+
+  @discardableResult
+  public mutating func recordPartialRange(
+    index: Int,
+    metadata: WatchShareResumeMetadata
+  ) -> WatchShareReceiptResult {
+    guard let activeOffer, !state.isTerminal,
+      let track = activeOffer.tracks.first(where: { $0.index == index }),
+      metadata.validationError(against: track) == nil
+    else { return .rejected }
+
+    if let receiptIndex = receipts.firstIndex(where: { $0.trackIndex == index }) {
+      let existing = receipts[receiptIndex]
+      guard existing.track == track else { return .rejected }
+      guard !existing.isComplete else { return .duplicate }
+      guard let existingMetadata = existing.resumeMetadata else { return .rejected }
+      guard existingMetadata.entityTag == metadata.entityTag,
+        existingMetadata.lastModified == metadata.lastModified
+      else { return .rejected }
+      guard metadata.receivedByteCount >= existingMetadata.receivedByteCount else {
+        return .rejected
+      }
+      if existingMetadata == metadata { return .duplicate }
+      receipts[receiptIndex] = WatchShareTrackReceipt(
+        track: track,
+        state: .partial,
+        resumeMetadata: metadata,
+        replacementGeneration: replacementGeneration
+      )
+      state = .downloading
+      return .accepted
+    }
+
+    receipts.append(
+      WatchShareTrackReceipt(
+        track: track,
+        state: .partial,
+        resumeMetadata: metadata,
+        replacementGeneration: replacementGeneration
+      )
+    )
+    receipts.sort { $0.trackIndex < $1.trackIndex }
+    state = .downloading
+    return .accepted
+  }
+
+  @discardableResult
+  public mutating func recordValidatedTrack(
+    index: Int,
+    data: Data
+  ) -> WatchShareReceiptResult {
+    guard let activeOffer, !state.isTerminal,
+      let track = activeOffer.tracks.first(where: { $0.index == index }),
+      track.validate(data: data) == nil
+    else { return .rejected }
+
+    if let receiptIndex = receipts.firstIndex(where: { $0.trackIndex == index }) {
+      let existing = receipts[receiptIndex]
+      guard existing.track == track else { return .rejected }
+      if existing.isComplete { return .duplicate }
+      receipts[receiptIndex] = WatchShareTrackReceipt(
+        track: track,
+        state: .completed,
+        resumeMetadata: nil,
+        replacementGeneration: replacementGeneration
+      )
+    } else {
+      receipts.append(
+        WatchShareTrackReceipt(
+          track: track,
+          state: .completed,
+          resumeMetadata: nil,
+          replacementGeneration: replacementGeneration
+        )
+      )
+      receipts.sort { $0.trackIndex < $1.trackIndex }
+    }
+    state = .downloading
+    return .accepted
+  }
+
+  @discardableResult
+  public mutating func markCompleted() -> Bool {
+    guard isComplete, !state.isTerminal else { return false }
+    state = .completed
+    activeOffer = nil
+    return true
+  }
+
+  @discardableResult
+  public mutating func markExpired(at date: Date = Date()) -> Bool {
+    guard let activeOffer, activeOffer.isExpired(at: date), !state.isTerminal else {
+      return false
+    }
+    state = .expired
+    self.activeOffer = nil
+    receipts.removeAll { !$0.isComplete }
+    return true
+  }
+
+  @discardableResult
+  public mutating func replace(
+    with offer: WatchShareOffer,
+    at date: Date = Date()
+  ) -> Bool {
+    guard state == .expired || state == .failed,
+      offer.transferID == transferID,
+      offer.bookID == bookID,
+      offer.replacementGeneration == replacementGeneration + 1,
+      offer.isValid(at: date)
+    else { return false }
+
+    activeOffer = offer
+    lastShareID = offer.shareID
+    replacementGeneration = offer.replacementGeneration
+    receipts.removeAll { !$0.isComplete }
+    state = .offered
+    return true
+  }
+
+  public mutating func fail() {
+    guard !state.isTerminal else { return }
+    state = .failed
+    activeOffer = nil
+    receipts.removeAll { !$0.isComplete }
+  }
+
+  @discardableResult
+  public mutating func cancel() -> WatchShareCleanup {
+    if state != .completed {
+      state = .cancelled
+      activeOffer = nil
+      receipts.removeAll()
+    }
+    return cleanupPlan!
+  }
+}
+
+// Names with the transfer prefix keep the new contracts discoverable beside the
+// existing relay contracts without changing those relay types.
+public typealias WatchTransferShareOffer = WatchShareOffer
+public typealias WatchTransferShareTrackDescriptor = WatchShareTrackDescriptor
+public typealias WatchTransferShareLifecycle = WatchShareLifecycle
+
+/// Pure planning for segmented ranged downloads of one public-share track.
+///
+/// Hardware evidence showed a single monolithic background download task is
+/// deferred when the Watch display sleeps. Splitting a track into bounded
+/// HTTP-range segments keeps each unit small enough for watchOS to complete,
+/// makes progress observable per segment, and lets completed segments be
+/// reused across relaunches.
+public enum WatchShareSegmentPlanner {
+  public static let defaultSegmentByteCount: Int64 = 16 * 1024 * 1024
+
+  public struct Segment: Equatable, Sendable {
+    public let index: Int
+    public let startOffset: Int64
+    public let byteCount: Int64
+
+    public init(index: Int, startOffset: Int64, byteCount: Int64) {
+      self.index = index
+      self.startOffset = startOffset
+      self.byteCount = byteCount
+    }
+
+    /// Inclusive HTTP range header value for this segment.
+    public var rangeHeaderValue: String {
+      "bytes=\(startOffset)-\(startOffset + byteCount - 1)"
+    }
+  }
+
+  /// Splits a track into ordered segments. Returns an empty array for invalid
+  /// input; callers must treat a zero-byte track specially.
+  public static func plan(
+    totalByteCount: Int64,
+    segmentByteCount: Int64 = defaultSegmentByteCount
+  ) -> [Segment] {
+    guard totalByteCount > 0, segmentByteCount > 0 else { return [] }
+
+    var segments: [Segment] = []
+    var offset: Int64 = 0
+    var index = 0
+    while offset < totalByteCount {
+      let length = min(segmentByteCount, totalByteCount - offset)
+      segments.append(Segment(index: index, startOffset: offset, byteCount: length))
+      offset += length
+      index += 1
+    }
+    return segments
+  }
+
+  /// Selects segments that still need downloading given on-disk segment sizes.
+  /// A stored segment counts as complete only when its size matches exactly;
+  /// oversized/partial/corrupt segments are re-downloaded.
+  public static func missingSegments(
+    from plan: [Segment],
+    storedSegmentByteCounts: [Int: Int64]
+  ) -> [Segment] {
+    plan.filter { segment in
+      storedSegmentByteCounts[segment.index] != segment.byteCount
+    }
+  }
+
+  /// Sum of stored segment bytes that exactly match their planned size.
+  public static func completedByteCount(
+    for plan: [Segment],
+    storedSegmentByteCounts: [Int: Int64]
+  ) -> Int64 {
+    plan.reduce(0) { result, segment in
+      storedSegmentByteCounts[segment.index] == segment.byteCount ? result + segment.byteCount : result
+    }
+  }
 }

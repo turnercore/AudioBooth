@@ -1,7 +1,9 @@
 import Combine
 import Foundation
+import Models
 import OSLog
 import WatchConnectivity
+import WatchKit
 import WidgetKit
 
 struct WatchHomeSection: Identifiable, Hashable {
@@ -14,21 +16,15 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   static let shared = WatchConnectivityManager()
 
   @Published var continueListeningBooks: [WatchBook] = []
+  @Published var phoneDownloadedBooks: [WatchPhoneLibraryBook] = []
+  @Published var watchTransferJobs: [WatchTransferJob] = []
+  @Published private(set) var watchTransferByteProgress: [String: WatchTransferByteProgress] = [:]
   @Published var progress: [String: Double] = [:]
   private(set) var progressUpdatedAt: [String: Double] = [:]
   @Published var hasCurrentBook: Bool = false
   @Published var playbackRate: Float = 1.0
   @Published var homeSections: [WatchHomeSection] = []
   private var chapterProgress: Double?
-
-  var customHeaders: [String: String] {
-    get {
-      UserDefaults.standard.dictionary(forKey: Keys.customHeaders) as? [String: String] ?? [:]
-    }
-    set {
-      UserDefaults.standard.set(newValue, forKey: Keys.customHeaders)
-    }
-  }
 
   var skipForwardInterval: Double {
     get {
@@ -52,12 +48,18 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
 
   private var session: WCSession?
   private var cancellables = Set<AnyCancellable>()
+  private var pendingWatchRelayBookID: String?
+  private var watchRelayRequestInFlightBookID: String?
+  @Published private(set) var durablyRequestedBookIDs: Set<String> = []
 
   private enum Keys {
     static let continueListeningBooks = "continue_listening_books"
     static let progress = "progress"
     static let progressUpdatedAt = "progress_updated_at"
-    static let customHeaders = "custom_headers"
+    static let phoneDownloadedBooks = "phone_downloaded_books"
+    static let watchTransferJobs = "watch_transfer_jobs"
+    static let pendingWatchRelayBookID = "pending_watch_relay_book_id"
+    static let durablyRequestedBookIDs = "durably_requested_watch_relay_book_ids"
     static let skipForwardInterval = "skip_forward_interval"
     static let skipBackwardInterval = "skip_backward_interval"
   }
@@ -77,6 +79,27 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
       session?.delegate = self
       session?.activate()
     }
+
+    NotificationCenter.default.addObserver(
+      forName: WKExtension.applicationDidBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { _ in
+      Task { @MainActor in
+        WatchConnectivityManager.shared.resumeWatchRelay()
+      }
+    }
+
+    Task { @MainActor in
+      WatchConnectivityManager.shared.resumeWatchRelay()
+    }
+  }
+
+  @MainActor
+  private func resumeWatchRelay() {
+    watchRelayRequestInFlightBookID = nil
+    WatchFileTransferReceiver.resumeRelayTransfers()
+    sendWatchRelayRequestIfPossible()
   }
 
   private func setupObservers() {
@@ -92,12 +115,31 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   }
 
   private func loadPersistedState() {
+    UserDefaults.standard.removeObject(forKey: "custom_headers")
+
     if let data = UserDefaults.standard.data(forKey: Keys.continueListeningBooks),
       let books = try? JSONDecoder().decode([WatchBook].self, from: data)
     {
       continueListeningBooks = books
       AppLogger.watchConnectivity.info("Loaded \(books.count) persisted books")
     }
+
+    if let data = UserDefaults.standard.data(forKey: Keys.phoneDownloadedBooks),
+      let books = try? JSONDecoder().decode([WatchPhoneLibraryBook].self, from: data)
+    {
+      phoneDownloadedBooks = books
+    }
+
+    if let data = UserDefaults.standard.data(forKey: Keys.watchTransferJobs),
+      let jobs = try? JSONDecoder().decode([WatchTransferJob].self, from: data)
+    {
+      watchTransferJobs = jobs
+    }
+
+    pendingWatchRelayBookID = UserDefaults.standard.string(forKey: Keys.pendingWatchRelayBookID)
+    durablyRequestedBookIDs = Set(
+      UserDefaults.standard.stringArray(forKey: Keys.durablyRequestedBookIDs) ?? []
+    )
 
     if let progressData = UserDefaults.standard.dictionary(forKey: Keys.progress)
       as? [String: Double]
@@ -123,10 +165,185 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     UserDefaults.standard.set(progressUpdatedAt, forKey: Keys.progressUpdatedAt)
   }
 
-  func recordLocalProgress(bookID: String, currentTime: Double) {
+  func requestPhoneDownloads() {
+    sendTransferCommand(["command": "requestPhoneDownloads"])
+  }
+
+  func requestWatchTransfer(bookID: String) {
+    // Official transport: a durable, reply-free request the phone answers by
+    // queueing WCSession.transferFile chunks. The foreground relay is never
+    // started implicitly from this button.
+    durablyRequestedBookIDs.insert(bookID)
+    persistDurablyRequestedBookIDs()
+    guard let session else { return }
+    session.transferUserInfo(["command": "requestWatchTransfer", "bookID": bookID])
+  }
+
+  func cancelWatchTransfer(bookID: String) {
+    if pendingWatchRelayBookID == bookID {
+      pendingWatchRelayBookID = nil
+      watchRelayRequestInFlightBookID = nil
+      UserDefaults.standard.removeObject(forKey: Keys.pendingWatchRelayBookID)
+    }
+    durablyRequestedBookIDs.remove(bookID)
+    persistDurablyRequestedBookIDs()
+    WatchShareDownloadCoordinator.shared.cancel(bookID: bookID)
+    WatchFileTransferReceiver.cancelRelay(bookID: bookID)
+    sendTransferCommand(["command": "cancelWatchTransfer", "bookID": bookID])
+  }
+
+  @MainActor
+  func publishWatchTransferProgress(
+    transferID: String,
+    progress: WatchTransferByteProgress
+  ) {
+    watchTransferByteProgress[transferID] = progress
+  }
+
+  @MainActor
+  func clearWatchTransferProgress(transferID: String) {
+    watchTransferByteProgress.removeValue(forKey: transferID)
+  }
+
+  @discardableResult
+  func sendWatchRelayChunkRequest(
+    _ request: WatchTransferChunkRequest,
+    replyHandler: @escaping (Data) -> Void,
+    errorHandler: @escaping (Error) -> Void
+  ) -> Bool {
+    guard let session, session.isReachable else { return false }
+
+    let encoder = PropertyListEncoder()
+    encoder.outputFormat = .binary
+    guard let data = try? encoder.encode(request) else {
+      AppLogger.watchConnectivity.error("Failed to encode Watch relay chunk request")
+      return false
+    }
+
+    session.sendMessageData(
+      data,
+      replyHandler: replyHandler,
+      errorHandler: errorHandler
+    )
+    return true
+  }
+
+  private func sendWatchRelayRequestIfPossible() {
+    guard let bookID = pendingWatchRelayBookID,
+      watchRelayRequestInFlightBookID == nil,
+      let session,
+      session.isReachable
+    else { return }
+
+    watchRelayRequestInFlightBookID = bookID
+    session.sendMessage(
+      ["command": "requestWatchRelay", "bookID": bookID],
+      replyHandler: { [weak self] response in
+        let shareOfferData = response["shareOffer"] as? Data
+        let manifestData =
+          response["manifest"] as? Data
+          ?? response["manifestData"] as? Data
+
+        Task { @MainActor in
+          guard let self, self.watchRelayRequestInFlightBookID == bookID else { return }
+          self.watchRelayRequestInFlightBookID = nil
+          guard self.pendingWatchRelayBookID == bookID else {
+            self.sendWatchRelayRequestIfPossible()
+            return
+          }
+
+          if let shareOfferData,
+            let offer = try? PropertyListDecoder().decode(WatchShareOffer.self, from: shareOfferData),
+            offer.bookID == bookID
+          {
+            self.clearPendingRequest(bookID: bookID)
+            WatchShareDownloadCoordinator.shared.receive(offer)
+            return
+          }
+
+          guard let manifestData else {
+            AppLogger.watchConnectivity.error(
+              "Watch transfer reply contained neither a share offer nor a relay manifest"
+            )
+            return
+          }
+          self.clearPendingRequest(bookID: bookID)
+          WatchFileTransferReceiver.receiveRelayManifest(
+            manifestData,
+            expectedBookID: bookID
+          )
+        }
+      },
+      errorHandler: { [weak self] error in
+        AppLogger.watchConnectivity.error("Failed to request Watch relay: \(error)")
+        Task { @MainActor in
+          guard let self, self.watchRelayRequestInFlightBookID == bookID else { return }
+          self.watchRelayRequestInFlightBookID = nil
+          self.pendingWatchRelayBookID = bookID
+          UserDefaults.standard.set(bookID, forKey: Keys.pendingWatchRelayBookID)
+          self.enqueueDurableWatchTransferRequestOnce(bookID: bookID)
+        }
+      }
+    )
+  }
+
+  private func enqueueDurableWatchTransferRequestOnce(bookID: String) {
+    guard let session, durablyRequestedBookIDs.insert(bookID).inserted else { return }
+    persistDurablyRequestedBookIDs()
+    session.transferUserInfo(["command": "requestWatchTransfer", "bookID": bookID])
+  }
+
+  private func clearPendingRequest(bookID: String) {
+    if pendingWatchRelayBookID == bookID {
+      pendingWatchRelayBookID = nil
+      UserDefaults.standard.removeObject(forKey: Keys.pendingWatchRelayBookID)
+    }
+    durablyRequestedBookIDs.remove(bookID)
+    persistDurablyRequestedBookIDs()
+  }
+
+  private func persistDurablyRequestedBookIDs() {
+    UserDefaults.standard.set(durablyRequestedBookIDs.sorted(), forKey: Keys.durablyRequestedBookIDs)
+  }
+
+  func sendWatchTransferCompletion(transferID: String) {
+    sendTransferCommand(["command": "watchTransferCompleted", "transferID": transferID])
+  }
+
+  func sendWatchShareStatus(
+    command: String,
+    transferID: String,
+    bookID: String,
+    shareID: String,
+    replacementGeneration: Int
+  ) {
+    sendTransferCommand([
+      "command": command,
+      "transferID": transferID,
+      "bookID": bookID,
+      "shareID": shareID,
+      "replacementGeneration": replacementGeneration,
+    ])
+  }
+
+  private func sendTransferCommand(_ message: [String: Any]) {
+    guard let session else { return }
+    if session.isReachable {
+      session.sendMessage(message, replyHandler: nil) { error in
+        AppLogger.watchConnectivity.error("Failed to send Watch transfer command: \(error)")
+      }
+    } else {
+      session.transferUserInfo(message)
+    }
+  }
+
+  @discardableResult
+  func recordLocalProgress(bookID: String, currentTime: Double) -> Date {
+    let updatedAt = Date()
     progress[bookID] = currentTime
-    progressUpdatedAt[bookID] = Date().timeIntervalSince1970
+    progressUpdatedAt[bookID] = updatedAt.timeIntervalSince1970
     persistProgress()
+    return updatedAt
   }
 
   func changePlaybackRate(_ rate: Float) {
@@ -216,7 +433,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   }
 
   func reportProgress(bookID: String, sessionID: String?, currentTime: Double, timeListened: Double, duration: Double) {
-    recordLocalProgress(bookID: bookID, currentTime: currentTime)
+    let updatedAt = recordLocalProgress(bookID: bookID, currentTime: currentTime)
 
     guard let session, session.isReachable, let sessionID, !sessionID.isEmpty else {
       WatchLocalSessionStore.shared.record(
@@ -235,6 +452,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
       "currentTime": currentTime,
       "timeListened": timeListened,
       "duration": duration,
+      "updatedAt": updatedAt.timeIntervalSince1970,
     ]
 
     session.sendMessage(message, replyHandler: nil) { _ in
@@ -418,6 +636,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
         let context = session.receivedApplicationContext
         Task { @MainActor in
           handleContext(context)
+          resumeWatchRelay()
         }
 
         if session.isReachable {
@@ -432,9 +651,13 @@ extension WatchConnectivityManager: WCSessionDelegate {
   }
 
   func sessionReachabilityDidChange(_ session: WCSession) {
-    guard session.isReachable else { return }
     Task { @MainActor in
+      guard session.isReachable else {
+        WatchFileTransferReceiver.pauseRelayTransfers()
+        return
+      }
       flushLocalSessions()
+      resumeWatchRelay()
     }
   }
 
@@ -450,6 +673,16 @@ extension WatchConnectivityManager: WCSessionDelegate {
     }
   }
 
+  func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+    Task { @MainActor in
+      handleMessage(userInfo)
+    }
+  }
+
+  func session(_ session: WCSession, didReceive file: WCSessionFile) {
+    WatchFileTransferReceiver.receive(file)
+  }
+
   private func handleContext(_ context: [String: Any]) {
     hasCurrentBook = context["hasCurrentBook"] as? Bool ?? false
     playbackRate = context["playbackRate"] as? Float ?? 1.0
@@ -457,6 +690,24 @@ extension WatchConnectivityManager: WCSessionDelegate {
 
     let continueListeningData = context["continueListening"] as? [[String: Any]] ?? []
     handleContinueListening(continueListeningData)
+
+    if let data = context["phoneDownloadedBooks"] as? Data,
+      let books = try? JSONDecoder().decode([WatchPhoneLibraryBook].self, from: data)
+    {
+      phoneDownloadedBooks = books
+      UserDefaults.standard.set(data, forKey: Keys.phoneDownloadedBooks)
+    }
+
+    if let data = context["watchTransferJobs"] as? Data,
+      let jobs = try? JSONDecoder().decode([WatchTransferJob].self, from: data)
+    {
+      watchTransferJobs = jobs
+      UserDefaults.standard.set(data, forKey: Keys.watchTransferJobs)
+      for job in jobs where durablyRequestedBookIDs.contains(job.bookID) {
+        durablyRequestedBookIDs.remove(job.bookID)
+      }
+      persistDurablyRequestedBookIDs()
+    }
 
     let progressData = context["progress"] as? [String: Double] ?? [:]
     let updatedAtData = context["progressUpdatedAt"] as? [String: Double] ?? [:]
@@ -471,10 +722,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
       return WatchHomeSection(id: id, name: name, count: count)
     }
 
-    if let headers = context["customHeaders"] as? [String: String] {
-      customHeaders = headers
-    }
-
     if let forward = context["skipForwardInterval"] as? Double {
       skipForwardInterval = forward
     }
@@ -482,12 +729,51 @@ extension WatchConnectivityManager: WCSessionDelegate {
     if let backward = context["skipBackwardInterval"] as? Double {
       skipBackwardInterval = backward
     }
+
+    receiveWatchShareOffer(from: context)
   }
 
   private func handleMessage(_ message: [String: Any]) {
     if let progressData = message["progress"] as? [String: Double] {
       handleProgress(progressData)
     }
+    receiveWatchShareOffer(from: message)
+    receiveWatchRelayFallback(from: message)
+  }
+
+  private func receiveWatchShareOffer(from payload: [String: Any]) {
+    let data =
+      payload["watchShareOffer"] as? Data
+      ?? payload["shareOffer"] as? Data
+      ?? payload["offer"] as? Data
+    guard let data else { return }
+
+    let offer =
+      (try? JSONDecoder().decode(WatchShareOffer.self, from: data))
+      ?? (try? PropertyListDecoder().decode(WatchShareOffer.self, from: data))
+    guard let offer else {
+      AppLogger.watchConnectivity.error("Rejected undecodable Watch share offer")
+      return
+    }
+    clearPendingRequest(bookID: offer.bookID)
+    WatchShareDownloadCoordinator.shared.receive(offer)
+  }
+
+  private func receiveWatchRelayFallback(from payload: [String: Any]) {
+    guard let data = payload["watchRelayManifest"] as? Data,
+      let transferID = payload["transferID"] as? String,
+      let bookID = payload["bookID"] as? String,
+      WatchShareDownloadCoordinator.shared.acceptsRelayFallback(
+        transferID: transferID,
+        bookID: bookID
+      ),
+      let manifest = try? PropertyListDecoder().decode(WatchTransferManifest.self, from: data),
+      manifest.transferID == transferID,
+      manifest.bookID == bookID
+    else { return }
+
+    clearPendingRequest(bookID: bookID)
+    WatchFileTransferReceiver.receiveRelayManifest(data, expectedBookID: bookID)
   }
 
   private func handleContinueListening(_ data: [[String: Any]]) {

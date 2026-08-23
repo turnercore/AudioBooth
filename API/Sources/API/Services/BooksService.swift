@@ -7,6 +7,28 @@ public final class BooksService {
     self.audiobookshelf = audiobookshelf
   }
 
+  /// Fetches raw cover image bytes through the authenticated network pipeline.
+  public func fetchCoverData(itemID: String) async throws -> Data {
+    guard let networkService = audiobookshelf.networkService else {
+      throw Audiobookshelf.AudiobookshelfError.networkError(
+        "Network service not configured. Please login first."
+      )
+    }
+
+    let request = NetworkRequest<Data>(
+      path: "/api/items/\(itemID)/cover",
+      query: ["raw": "1"],
+      timeout: 10
+    )
+    let response = try await networkService.send(request)
+    guard !response.value.isEmpty else {
+      throw Audiobookshelf.AudiobookshelfError.networkError(
+        "The server did not return cover artwork."
+      )
+    }
+    return response.value
+  }
+
   public func fetch(
     limit: Int? = nil,
     page: Int? = nil,

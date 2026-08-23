@@ -49,7 +49,7 @@ final class BookPlayerModel: PlayerView.Model {
       totalTimeRemaining: self.book.timeRemaining,
       title: self.book.title,
       author: self.book.authorName,
-      coverURL: self.book.coverURL,
+      coverURL: self.book.preferredCoverURL,
       chapters: nil
     )
 

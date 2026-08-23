@@ -86,7 +86,24 @@ enum LocalPlaybackTimelineReconciler {
           || abs(track.duration - timing.duration) > durationTolerance
       }
 
-    guard needsReconciliation else { return }
+    // Even when the file layout already matches, a previously-doubled
+    // MediaProgress can leave tiles at 50% = finished. Always re-derive
+    // progress from currentTime and the correct timeline duration.
+    if !needsReconciliation {
+      let progress = mediaProgress ?? (try? MediaProgress.fetch(bookID: bookID))
+      if let progress, timeline.duration > 0 {
+        let corrected = min(1, max(0, progress.currentTime / timeline.duration))
+        if abs(progress.progress - corrected) > 0.01 || abs(progress.duration - timeline.duration) > durationTolerance {
+          progress.duration = timeline.duration
+          progress.progress = corrected
+          progress.isFinished = corrected >= 1
+          progress.finishedAt = progress.isFinished ? (progress.finishedAt ?? Date()) : nil
+          try? progress.save()
+          AppLogger.player.info("Corrected stale progress for \(bookID): \(progress.progress)")
+        }
+      }
+      return
+    }
 
     let previousDuration = currentBook.duration
     for track in currentBook.tracks {

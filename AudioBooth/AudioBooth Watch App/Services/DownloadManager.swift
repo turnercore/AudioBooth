@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Models
 import OSLog
 
 final class DownloadManager: NSObject, ObservableObject {
@@ -26,31 +27,13 @@ final class DownloadManager: NSObject, ObservableObject {
   @Published private(set) var currentProgress: [String: Double] = [:]
 
   func isDownloading(for bookID: String) -> Bool {
-    activeOperations[bookID] != nil
+    connectivityManager.watchTransferJobs.contains {
+      $0.bookID == bookID && ($0.state == .queued || $0.state == .transferring)
+    }
   }
 
   func startDownload(for book: WatchBook) {
-    guard activeOperations[book.id] == nil else { return }
-
-    Task {
-      guard
-        let localBook = await connectivityManager.startSession(bookID: book.id, forDownload: true)
-      else {
-        AppLogger.download.error("Failed to get download info")
-        return
-      }
-
-      var bookToSave = localBook
-      bookToSave.currentTime = book.currentTime
-      if bookToSave.coverURL == nil {
-        bookToSave.coverURL = book.coverURL
-      }
-      localStorage.saveBook(bookToSave)
-
-      await MainActor.run {
-        startDownloadOperation(for: bookToSave)
-      }
-    }
+    connectivityManager.requestWatchTransfer(bookID: book.id)
   }
 
   private func startDownloadOperation(
@@ -87,6 +70,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
   func cancelDownload(for bookID: String) {
     activeOperations[bookID]?.cancel()
+    connectivityManager.cancelWatchTransfer(bookID: bookID)
     currentProgress.removeValue(forKey: bookID)
   }
 
@@ -329,11 +313,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
       }
 
       try await withCheckedThrowingContinuation { continuation in
-        var request = URLRequest(url: downloadURL)
-        for (key, value) in WatchConnectivityManager.shared.customHeaders {
-          request.setValue(value, forHTTPHeaderField: key)
-        }
-        let downloadTask = downloadSession.downloadTask(with: request)
+        let downloadTask = downloadSession.downloadTask(with: URLRequest(url: downloadURL))
         downloadTask.taskDescription = "\(track.index)|\(fileExtension)"
         downloadTask.countOfBytesClientExpectsToReceive =
           track.size.map { Int64($0) } ?? NSURLSessionTransferSizeUnknown

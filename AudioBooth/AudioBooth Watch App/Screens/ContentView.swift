@@ -9,7 +9,7 @@ struct ContentView: View {
 
   var body: some View {
     NavigationStack {
-      ContinueListeningView(model: ContinueListeningViewModel())
+      PhoneDownloadsView()
         .toolbar {
           toolbar
         }

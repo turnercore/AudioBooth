@@ -19,6 +19,7 @@ public final class Audiobookshelf {
   public lazy var playlists = PlaylistsService(audiobookshelf: self)
   public lazy var collections = CollectionsService(audiobookshelf: self)
   public lazy var bookmarks = BookmarksService(audiobookshelf: self)
+  public lazy var shares = SharesService(audiobookshelf: self)
   public lazy var networkDiscovery = NetworkDiscoveryService()
   public lazy var misc = MiscService(audiobookshelf: self)
 

@@ -6,6 +6,7 @@ struct WatchBook: Codable, Identifiable {
   let title: String
   let authorName: String?
   var coverURL: URL?
+  var coverRelativePath: String?
   let duration: Double
   let chapters: [WatchChapter]
   var tracks: [WatchTrack]
@@ -29,12 +30,18 @@ struct WatchBook: Codable, Identifiable {
     return URL.documentsDirectory.appendingPathComponent(relativePath)
   }
 
+  var preferredCoverURL: URL? {
+    guard let coverRelativePath else { return coverURL }
+    return URL.documentsDirectory.appendingPathComponent(coverRelativePath)
+  }
+
   init(
     id: String,
     sessionID: String? = nil,
     title: String,
     authorName: String?,
     coverURL: URL?,
+    coverRelativePath: String? = nil,
     duration: Double,
     chapters: [WatchChapter],
     tracks: [WatchTrack] = [],
@@ -45,6 +52,7 @@ struct WatchBook: Codable, Identifiable {
     self.title = title
     self.authorName = authorName
     self.coverURL = coverURL
+    self.coverRelativePath = coverRelativePath
     self.duration = duration
     self.chapters = chapters
     self.tracks = tracks
@@ -64,6 +72,7 @@ struct WatchBook: Codable, Identifiable {
     self.title = title
     self.authorName = dictionary["author"] as? String
     self.coverURL = (dictionary["coverURL"] as? String).flatMap { URL(string: $0) }
+    self.coverRelativePath = nil
     self.duration = duration
     self.currentTime = currentTime
     self.tracks = []

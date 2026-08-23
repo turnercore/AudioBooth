@@ -10,6 +10,8 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
 
   private var session: WCSession?
   private var context: [String: Any] = [:]
+  @MainActor private var progressSyncTasks: [String: Task<Void, Never>] = [:]
+  private let fileTransferCoordinator = WatchFileTransferCoordinator.shared
 
   private enum Keys {
     static let watchDownloadedBookIDs = "watch_downloaded_book_ids"
@@ -70,7 +72,6 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
         "id": book.id,
         "title": book.title,
         "author": book.authorName as Any,
-        "coverURL": watchCompatibleCoverURL(from: book.coverURL()) as Any,
         "duration": book.duration,
       ])
 
@@ -146,11 +147,42 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     updateContext()
   }
 
+  func syncPhoneDownloadedBooks() {
+    publishPhoneDownloadedBooks()
+    guard let session else { return }
+    Task { @MainActor in
+      await fileTransferCoordinator.prepareCatalogThumbnails(session: session)
+    }
+  }
+
+  private func publishPhoneDownloadedBooks() {
+    context["phoneDownloadedBooks"] = try? JSONEncoder().encode(
+      fileTransferCoordinator.phoneDownloadedBooks()
+    )
+    context["watchTransferJobs"] = try? JSONEncoder().encode(fileTransferCoordinator.jobs)
+    updateContext()
+  }
+
+  func cancelWatchTransfers(for bookID: String) {
+    guard let session else { return }
+    Task { @MainActor in
+      await fileTransferCoordinator.cancelTransfer(bookID: bookID, session: session)
+      syncPhoneDownloadedBooks()
+    }
+  }
+
+  func cancelAllWatchTransfers() {
+    guard let session else { return }
+    Task { @MainActor in
+      await fileTransferCoordinator.cancelAllTransfers(session: session)
+      syncPhoneDownloadedBooks()
+    }
+  }
+
   private func updateContext() {
     guard let session, session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else {
       return
     }
-    context["customHeaders"] = watchRequestHeaders()
     context["skipForwardInterval"] = UserPreferences.shared.skipForwardInterval
     context["skipBackwardInterval"] = UserPreferences.shared.skipBackwardInterval
     do {
@@ -209,6 +241,12 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     ]
     return components?.url?.absoluteString ?? url.absoluteString
   }
+
+  private static func binaryPropertyListData<Value: Encodable>(_ value: Value) throws -> Data {
+    let encoder = PropertyListEncoder()
+    encoder.outputFormat = .binary
+    return try encoder.encode(value)
+  }
 }
 
 extension WatchConnectivityManager: WCSessionDelegate {
@@ -227,8 +265,10 @@ extension WatchConnectivityManager: WCSessionDelegate {
       )
 
       Task {
-        if activationState == .activated, Audiobookshelf.shared.authentication.server != nil {
-          try await Task.sleep(nanoseconds: 1_000_000_000)
+        guard activationState == .activated else { return }
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        syncPhoneDownloadedBooks()
+        if Audiobookshelf.shared.authentication.server != nil {
           syncCachedDataToWatch()
         }
       }
@@ -236,6 +276,8 @@ extension WatchConnectivityManager: WCSessionDelegate {
   }
 
   private func syncCachedDataToWatch() {
+    syncPhoneDownloadedBooks()
+
     guard let personalized = Audiobookshelf.shared.libraries.getCachedPersonalized() else {
       AppLogger.watchConnectivity.info("No cached personalized data to sync to watch")
       return
@@ -307,7 +349,8 @@ extension WatchConnectivityManager: WCSessionDelegate {
             sessionID: sessionID,
             currentTime: currentTime,
             timeListened: timeListened,
-            duration: duration
+            duration: duration,
+            updatedAt: (message["updatedAt"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
           )
         }
       case "syncDownloadedBooks":
@@ -318,10 +361,112 @@ extension WatchConnectivityManager: WCSessionDelegate {
           )
           refreshProgress()
         }
+      case "requestPhoneDownloads":
+        syncPhoneDownloadedBooks()
+      case "requestWatchTransfer":
+        guard let bookID = message["bookID"] as? String else { return }
+        await fileTransferCoordinator.queueTransfer(bookID: bookID, session: session)
+        syncPhoneDownloadedBooks()
+      case "cancelWatchTransfer":
+        guard let bookID = message["bookID"] as? String else { return }
+        cancelWatchTransfers(for: bookID)
+      case "watchTransferCompleted", "watchShareCompleted":
+        guard let transferID = message["transferID"] as? String else { return }
+        await fileTransferCoordinator.receiveWatchCompletion(transferID: transferID)
+        syncPhoneDownloadedBooks()
+      case "watchShareCancelled":
+        guard let transferID = message["transferID"] as? String else { return }
+        await fileTransferCoordinator.receiveWatchCancellation(transferID: transferID)
+        syncPhoneDownloadedBooks()
+      case "watchShareFailed":
+        guard let transferID = message["transferID"] as? String,
+          let bookID = message["bookID"] as? String
+        else { return }
+        await deliverRelayFallback(transferID: transferID, bookID: bookID, session: session)
+        syncPhoneDownloadedBooks()
+      case "requestWatchShareReplacement":
+        guard let transferID = message["transferID"] as? String,
+          let bookID = message["bookID"] as? String
+        else { return }
+        await sendReplacementShare(transferID: transferID, bookID: bookID, session: session)
       default:
         AppLogger.watchConnectivity.warning(
           "Unknown command from watch: \(command)"
         )
+      }
+    }
+  }
+
+  func session(_ session: WCSession, didFinish fileTransfer: WCSessionFileTransfer, error: Error?) {
+    Task { @MainActor in
+      fileTransferCoordinator.receiveCompletion(for: fileTransfer, error: error)
+      syncPhoneDownloadedBooks()
+    }
+  }
+
+  func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+    guard let command = userInfo["command"] as? String else { return }
+
+    Task { @MainActor in
+      switch command {
+      case "requestPhoneDownloads":
+        syncPhoneDownloadedBooks()
+      case "requestWatchTransfer":
+        guard let bookID = userInfo["bookID"] as? String else { return }
+        await fileTransferCoordinator.queueTransfer(bookID: bookID, session: session)
+        syncPhoneDownloadedBooks()
+      case "cancelWatchTransfer":
+        guard let bookID = userInfo["bookID"] as? String else { return }
+        await fileTransferCoordinator.cancelTransfer(bookID: bookID, session: session)
+        syncPhoneDownloadedBooks()
+      case "watchTransferCompleted", "watchShareCompleted":
+        guard let transferID = userInfo["transferID"] as? String else { return }
+        await fileTransferCoordinator.receiveWatchCompletion(transferID: transferID)
+        syncPhoneDownloadedBooks()
+      case "watchShareCancelled":
+        guard let transferID = userInfo["transferID"] as? String else { return }
+        await fileTransferCoordinator.receiveWatchCancellation(transferID: transferID)
+        syncPhoneDownloadedBooks()
+      case "watchShareFailed":
+        guard let transferID = userInfo["transferID"] as? String,
+          let bookID = userInfo["bookID"] as? String
+        else { return }
+        await deliverRelayFallback(transferID: transferID, bookID: bookID, session: session)
+        syncPhoneDownloadedBooks()
+      case "requestWatchShareReplacement":
+        guard let transferID = userInfo["transferID"] as? String,
+          let bookID = userInfo["bookID"] as? String
+        else { return }
+        await sendReplacementShare(transferID: transferID, bookID: bookID, session: session)
+      default:
+        break
+      }
+    }
+  }
+
+  func session(
+    _ session: WCSession,
+    didReceiveMessageData messageData: Data,
+    replyHandler: @escaping (Data) -> Void
+  ) {
+    let request: WatchTransferChunkRequest
+    do {
+      request = try PropertyListDecoder().decode(WatchTransferChunkRequest.self, from: messageData)
+    } catch {
+      AppLogger.watchConnectivity.warning("Rejected invalid Watch relay chunk request")
+      replyHandler(Data())
+      return
+    }
+
+    Task { @MainActor in
+      do {
+        let response = try fileTransferCoordinator.relayChunkResponse(for: request)
+        replyHandler(try Self.binaryPropertyListData(response))
+      } catch {
+        AppLogger.watchConnectivity.warning(
+          "Rejected Watch relay chunk request: \(error.localizedDescription)"
+        )
+        replyHandler(Data())
       }
     }
   }
@@ -340,6 +485,13 @@ extension WatchConnectivityManager: WCSessionDelegate {
 
     Task {
       switch command {
+      case "requestWatchRelay":
+        guard let bookID = message["bookID"] as? String else {
+          replyHandler(["error": "Missing bookID"])
+          return
+        }
+        await handleWatchRelayRequest(bookID: bookID, replyHandler: replyHandler)
+
       case "startSession":
         guard let bookID = message["bookID"] as? String else {
           replyHandler(["error": "Missing bookID"])
@@ -370,6 +522,78 @@ extension WatchConnectivityManager: WCSessionDelegate {
       default:
         replyHandler(["error": "Unknown command: \(command)"])
       }
+    }
+  }
+
+  @MainActor
+  private func deliverRelayFallback(
+    transferID: String,
+    bookID: String,
+    session: WCSession
+  ) async {
+    do {
+      let manifest = try await fileTransferCoordinator.receiveWatchShareFailure(
+        transferID: transferID,
+        bookID: bookID
+      )
+      session.transferUserInfo([
+        "watchRelayManifest": try Self.binaryPropertyListData(manifest),
+        "transferID": transferID,
+        "bookID": bookID,
+      ])
+    } catch {
+      AppLogger.watchConnectivity.warning(
+        "Could not start Watch relay fallback: \(error.localizedDescription)"
+      )
+    }
+  }
+
+  @MainActor
+  private func sendReplacementShare(
+    transferID: String,
+    bookID: String,
+    session: WCSession
+  ) async {
+    do {
+      let offer = try await fileTransferCoordinator.replaceShareOffer(
+        transferID: transferID,
+        bookID: bookID
+      )
+      session.transferUserInfo([
+        "watchShareOffer": try Self.binaryPropertyListData(offer)
+      ])
+      syncPhoneDownloadedBooks()
+    } catch {
+      AppLogger.watchConnectivity.warning(
+        "Could not replace an expired Watch share: \(error.localizedDescription)"
+      )
+    }
+  }
+
+  @MainActor
+  private func handleWatchRelayRequest(
+    bookID: String,
+    replyHandler: @escaping ([String: Any]) -> Void
+  ) async {
+    do {
+      do {
+        let offer = try await fileTransferCoordinator.prepareShareOffer(bookID: bookID)
+        let offerData = try Self.binaryPropertyListData(offer)
+        replyHandler(["shareOffer": offerData])
+        session?.transferUserInfo(["watchShareOffer": offerData])
+      } catch {
+        AppLogger.watchConnectivity.warning(
+          "Could not prepare public Watch share; continuing with relay: \(error.localizedDescription)"
+        )
+        let manifest = try fileTransferCoordinator.beginRelay(bookID: bookID)
+        replyHandler(["manifest": try Self.binaryPropertyListData(manifest)])
+      }
+      syncPhoneDownloadedBooks()
+    } catch {
+      AppLogger.watchConnectivity.warning(
+        "Could not start Watch relay: \(error.localizedDescription)"
+      )
+      replyHandler(["error": error.localizedDescription])
     }
   }
 
@@ -453,14 +677,11 @@ extension WatchConnectivityManager: WCSessionDelegate {
         )
       }
 
-      let coverURLString = watchCompatibleCoverURL(from: book.coverURL())
-
       replyHandler([
         "id": bookID,
         "sessionID": sessionID ?? "",
         "title": book.title,
         "authorName": book.authorName ?? "",
-        "coverURL": coverURLString ?? "",
         "duration": book.duration,
         "tracks": tracks,
         "chapters": chapters,
@@ -495,7 +716,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
           "id": book.id,
           "title": book.title,
           "author": book.authorName as Any,
-          "coverURL": watchCompatibleCoverURL(from: book.coverURL()) as Any,
           "duration": book.duration,
         ]
       }
@@ -504,6 +724,65 @@ extension WatchConnectivityManager: WCSessionDelegate {
     } catch {
       AppLogger.watchConnectivity.error("Failed to fetch section books: \(error)")
       replyHandler(["error": error.localizedDescription])
+    }
+  }
+
+  private func applyWatchProgress(
+    bookID: String,
+    currentTime: TimeInterval,
+    duration: TimeInterval,
+    updatedAt: Date
+  ) -> Bool {
+    let safeDuration = max(duration, 1)
+    let incoming = WatchProgressSnapshot(
+      bookID: bookID,
+      currentTime: currentTime,
+      duration: safeDuration,
+      updatedAt: updatedAt
+    )
+
+    if let existing = try? MediaProgress.fetch(bookID: bookID) {
+      let local = WatchProgressSnapshot(
+        bookID: bookID,
+        currentTime: existing.currentTime,
+        duration: existing.duration,
+        updatedAt: existing.lastUpdate
+      )
+      guard WatchProgressReconciler.resolve(local: local, incoming: incoming) == incoming,
+        incoming.updatedAt > local.updatedAt
+      else { return false }
+
+      existing.currentTime = incoming.currentTime
+      existing.duration = incoming.duration
+      existing.progress = min(1, max(0, incoming.currentTime / incoming.duration))
+      existing.lastPlayedAt = incoming.updatedAt
+      existing.lastUpdate = incoming.updatedAt
+      existing.isFinished = existing.progress >= 1
+      existing.finishedAt = existing.isFinished ? incoming.updatedAt : nil
+      do {
+        try existing.save()
+        return true
+      } catch {
+        AppLogger.watchConnectivity.error("Failed to save Watch progress: \(error.localizedDescription)")
+        return false
+      }
+    }
+
+    do {
+      try MediaProgress(
+        bookID: bookID,
+        lastPlayedAt: incoming.updatedAt,
+        currentTime: incoming.currentTime,
+        duration: incoming.duration,
+        progress: min(1, max(0, incoming.currentTime / incoming.duration)),
+        isFinished: incoming.currentTime >= incoming.duration,
+        finishedAt: incoming.currentTime >= incoming.duration ? incoming.updatedAt : nil,
+        lastUpdate: incoming.updatedAt
+      ).save()
+      return true
+    } catch {
+      AppLogger.watchConnectivity.error("Failed to save Watch progress: \(error.localizedDescription)")
+      return false
     }
   }
 
@@ -525,16 +804,14 @@ extension WatchConnectivityManager: WCSessionDelegate {
       else { continue }
 
       let watchUpdatedAt = Date(timeIntervalSince1970: updatedAt)
-      let existingUpdatedAt = (try? MediaProgress.fetch(bookID: bookID))?.lastUpdate ?? .distantPast
-      if watchUpdatedAt > existingUpdatedAt {
-        let safeDuration = max(duration, 1)
-        try? MediaProgress.updateProgress(
-          for: bookID,
+      guard
+        applyWatchProgress(
+          bookID: bookID,
           currentTime: currentTime,
-          duration: safeDuration,
-          progress: min(1, max(0, currentTime / safeDuration))
+          duration: duration,
+          updatedAt: watchUpdatedAt
         )
-      }
+      else { continue }
 
       sessionSyncs.append(
         SessionSync(
@@ -575,28 +852,37 @@ extension WatchConnectivityManager: WCSessionDelegate {
     sessionID: String,
     currentTime: Double,
     timeListened: Double,
-    duration: Double
+    duration: Double,
+    updatedAt: Date
   ) {
-    Task {
-      do {
-        let safeDuration = max(duration, 1)
-        try? MediaProgress.updateProgress(
-          for: bookID,
-          currentTime: currentTime,
-          duration: safeDuration,
-          progress: min(1, max(0, currentTime / safeDuration))
-        )
+    Task { @MainActor in
+      let previous = progressSyncTasks[bookID]
+      let task = Task { @MainActor in
+        await previous?.value
+        do {
+          guard
+            applyWatchProgress(
+              bookID: bookID,
+              currentTime: currentTime,
+              duration: duration,
+              updatedAt: updatedAt
+            )
+          else {
+            AppLogger.watchConnectivity.debug("Ignored stale Watch progress for \(bookID)")
+            return
+          }
 
-        try await Audiobookshelf.shared.sessions.sync(
-          sessionID,
-          timeListened: timeListened,
-          currentTime: currentTime
-        )
-
-        AppLogger.watchConnectivity.debug("Synced watch progress: \(currentTime)s")
-      } catch {
-        AppLogger.watchConnectivity.error("Failed to sync watch progress: \(error)")
+          try await Audiobookshelf.shared.sessions.sync(
+            sessionID,
+            timeListened: timeListened,
+            currentTime: currentTime
+          )
+          AppLogger.watchConnectivity.debug("Synced watch progress: \(currentTime)s")
+        } catch {
+          AppLogger.watchConnectivity.error("Failed to sync watch progress: \(error)")
+        }
       }
+      progressSyncTasks[bookID] = task
     }
   }
 
@@ -627,14 +913,5 @@ extension WatchConnectivityManager: WCSessionDelegate {
         )
       }
     }
-  }
-}
-
-private extension WatchConnectivityManager {
-  func watchRequestHeaders() -> [String: String] {
-    guard let server = Audiobookshelf.shared.authentication.server else { return [:] }
-    var headers = server.customHeaders
-    headers["Authorization"] = server.token.bearer
-    return headers
   }
 }

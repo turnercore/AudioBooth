@@ -19,6 +19,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 - Avoid adding UI dependencies to `API`; UI files that use `LazyImage` should import `NukeUI` explicitly.
 - Keep DTO-to-local model mapping in app-side adapter code; do not reintroduce a `Models -> API` dependency.
 - Preserve server-provided play-session source hints such as `AudioTrack.contentUrl`; treat their values as sensitive playback credentials when logging.
+- Audiobookshelf 2.36 media shares are created/revoked through `SharesService`; callers must use bounded expiry and retain only IDs they created.
 
 ## Work Guidance
 

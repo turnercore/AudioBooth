@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multitrack audio - Improved audio player handling of multitrack books
 
 ### Fixed
+- Watch transfer progress - Correct stale 50% tiles by always re-deriving progress from the reconciled local timeline; queue transfers with a fresh playback position so Watch starts within seconds, not chapters behind
 - Downloaded audiobook progress - Reconcile offline duration and track timing with the downloaded audio files
 - Sleep timer resume - Clear completed timers without implicitly extending or immediately rearming them
 - Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape

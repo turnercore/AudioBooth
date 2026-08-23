@@ -685,6 +685,9 @@ final class DownloadManager: NSObject, ObservableObject {
     }
 
     downloadStates[itemID] = persistedState(for: itemID)
+    if currentKind != .episode {
+      WatchConnectivityManager.shared.syncPhoneDownloadedBooks()
+    }
     startNextIfIdle()
   }
 
@@ -1013,6 +1016,12 @@ extension DownloadManager {
   }
 
   func deleteDownload(for bookID: String) {
+    guard !WatchFileTransferCoordinator.shared.activeBookIDs.contains(bookID) else {
+      AppLogger.download.warning("Keeping iPhone download while its Watch transfer is active")
+      Toast(error: "Cancel the Watch transfer before deleting this download").show()
+      return
+    }
+
     guard let serverID = Audiobookshelf.shared.authentication.server?.id else {
       AppLogger.download.error("No active server for deletion")
       Toast(error: "No active server").show()
@@ -1035,6 +1044,7 @@ extension DownloadManager {
       }
     }
 
+    WatchConnectivityManager.shared.syncPhoneDownloadedBooks()
     AppLogger.download.info("Deleted download for book: \(bookID)")
   }
 
@@ -1107,6 +1117,8 @@ extension DownloadManager {
   }
 
   func deleteAllServerData() async {
+    WatchConnectivityManager.shared.cancelAllWatchTransfers()
+
     if let itemID = active?.itemID {
       cancelDownload(for: itemID)
     }
@@ -1144,6 +1156,7 @@ extension DownloadManager {
 
       downloadStates = downloadStates.mapValues { _ in .notDownloaded }
 
+      WatchConnectivityManager.shared.syncPhoneDownloadedBooks()
       AppLogger.download.info("Deleted all server data")
     } catch {
       AppLogger.download.error(

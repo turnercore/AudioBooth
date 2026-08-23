@@ -10,6 +10,10 @@ struct AudioBoothWatch: App {
     configureImagePipeline()
     DownloadManager.shared.cleanupOrphanedDownloads()
     _ = WatchConnectivityManager.shared
+    Task { @MainActor in
+      WatchFileTransferReceiver.recoverStagedTransfers()
+      WatchShareDownloadCoordinator.shared.resumePersistedTransfers()
+    }
   }
 
   var body: some Scene {
@@ -19,26 +23,6 @@ struct AudioBoothWatch: App {
   }
 
   private func configureImagePipeline() {
-    final class CustomHeaderDataLoader: DataLoading {
-      private let inner: DataLoader
-
-      init(inner: DataLoader) {
-        self.inner = inner
-      }
-
-      func loadData(
-        with request: URLRequest,
-        didReceiveData: @escaping @Sendable (Data, URLResponse) -> Void,
-        completion: @escaping @Sendable (Error?) -> Void
-      ) -> any Cancellable {
-        var request = request
-        for (key, value) in WatchConnectivityManager.shared.customHeaders {
-          request.setValue(value, forHTTPHeaderField: key)
-        }
-        return inner.loadData(with: request, didReceiveData: didReceiveData, completion: completion)
-      }
-    }
-
     ImagePipeline.shared = ImagePipeline {
       let config = URLSessionConfiguration.default
       config.timeoutIntervalForResource = 300
@@ -49,7 +33,7 @@ struct AudioBoothWatch: App {
       config.allowsConstrainedNetworkAccess = true
       config.urlCache = nil
 
-      $0.dataLoader = CustomHeaderDataLoader(inner: DataLoader(configuration: config))
+      $0.dataLoader = DataLoader(configuration: config)
       $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.watch.images")
     }
   }
@@ -60,10 +44,20 @@ final class AppDelegate: NSObject, WKApplicationDelegate {
     for task in backgroundTasks {
       switch task {
       case let urlSessionTask as WKURLSessionRefreshBackgroundTask:
-        DownloadManager.shared.reconnectBackgroundSession(
-          withIdentifier: urlSessionTask.sessionIdentifier
-        ) {
-          urlSessionTask.setTaskCompletedWithSnapshot(false)
+        if urlSessionTask.sessionIdentifier
+          == WatchShareDownloadCoordinator.backgroundSessionIdentifier
+        {
+          WatchShareDownloadCoordinator.shared.reconnectBackgroundSession(
+            withIdentifier: urlSessionTask.sessionIdentifier
+          ) {
+            urlSessionTask.setTaskCompletedWithSnapshot(false)
+          }
+        } else {
+          DownloadManager.shared.reconnectBackgroundSession(
+            withIdentifier: urlSessionTask.sessionIdentifier
+          ) {
+            urlSessionTask.setTaskCompletedWithSnapshot(false)
+          }
         }
 
       default:

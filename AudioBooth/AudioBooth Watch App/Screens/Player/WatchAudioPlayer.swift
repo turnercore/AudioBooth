@@ -160,7 +160,7 @@ private extension WatchAudioPlayer {
   func loadTrack(at index: Int, seekTo offset: TimeInterval, autoPlay: Bool) {
     guard index < trackURLs.count else { return }
 
-    let item = AVPlayerItem(url: trackURLs[index], headers: WatchConnectivityManager.shared.customHeaders)
+    let item = AVPlayerItem(url: trackURLs[index])
     item.audioTimePitchAlgorithm = .timeDomain
     observeItem(item)
     player.replaceCurrentItem(with: item)

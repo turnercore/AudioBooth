@@ -125,6 +125,17 @@ struct PlayerView: View {
         }
       )
       .disabled(model.playbackState != .ready)
+
+      Button(
+        action: {
+          playerManager.clearCurrent()
+          dismiss()
+        },
+        label: {
+          Image(systemName: "stop.fill")
+        }
+      )
+      .disabled(model.playbackState != .ready)
     }
   }
 

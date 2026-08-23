@@ -102,6 +102,8 @@ extension Book {
   }
 
   public struct Media: Codable, Sendable {
+    /// The server media record ID used by media-item share APIs. This differs from the library item ID.
+    public let id: String?
     public let metadata: Metadata
     public let duration: Double?
     public let size: Int64?

@@ -35,6 +35,15 @@ struct ContinueListeningView: View {
           }
         }
 
+        NavigationLink {
+          PhoneDownloadsView()
+        } label: {
+          Label("Downloads on iPhone", systemImage: "iphone.and.arrow.forward")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .padding(.horizontal)
+
         if !model.homeSections.isEmpty {
           sectionHeader("More")
           ForEach(model.homeSections) { section in

@@ -147,7 +147,7 @@ final class WatchTransferContractsTests: XCTestCase {
     XCTAssertTrue(receipt.isComplete)
   }
 
-  func testReceiptRequiresExpectedCoverBeforeCompletion() {
+  func testReceiptDoesNotRequireOptionalCoverForCompletion() {
     let manifest = WatchTransferManifest(
       transferID: "transfer",
       bookID: "book",
@@ -160,7 +160,7 @@ final class WatchTransferContractsTests: XCTestCase {
     var receipt = WatchTransferReceipt(manifest: manifest)
 
     receipt.recordReceivedTrack(index: 0)
-    XCTAssertFalse(receipt.isComplete)
+    XCTAssertTrue(receipt.isComplete)
 
     receipt.recordReceivedCover()
     XCTAssertTrue(receipt.isComplete)
@@ -369,9 +369,263 @@ final class WatchTransferContractsTests: XCTestCase {
     )
   }
 
+  func testRelayWindowCanSelectEightMissingChunks() {
+    let file = WatchTransferFileIdentity.track(
+      transferID: "transfer",
+      bookID: "book",
+      trackIndex: 0
+    )
+    let state = WatchTransferFileReceiveState(
+      file: file,
+      expectedByteCount: 10,
+      expectedChunkCount: 10
+    )
+    let requests = WatchTransferReceiveState(
+      identity: WatchTransferManifestIdentity(transferID: "transfer", bookID: "book"),
+      files: [state]
+    ).missingChunkRequests(limit: 8)
+
+    XCTAssertEqual(requests.count, 8)
+    XCTAssertEqual(requests.map(\.chunkIndex), Array(0..<8))
+  }
+
+  func testShareOfferRequiresHTTPSPublicHostAndBoundedExpiry() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let valid = makeShareOffer(now: now)
+    XCTAssertTrue(valid.isValid(at: now))
+
+    for url in [
+      URL(string: "http://share.example.test/public/share/slug")!,
+      URL(string: "https://192.168.1.10/audiobookshelf/public/share/slug")!,
+      URL(string: "https://100.92.133.126/audiobookshelf/public/share/slug")!,
+    ] {
+      XCTAssertFalse(makeShareOffer(now: now, publicBootstrapURL: url).isValid(at: now))
+    }
+
+    let expired = makeShareOffer(now: now, expiresAt: now)
+    XCTAssertEqual(expired.validationError(at: now), .expired)
+
+    let unbounded = makeShareOffer(
+      now: now,
+      expiresAt: now.addingTimeInterval(WatchShareOffer.maximumLifetime + 1)
+    )
+    XCTAssertEqual(unbounded.validationError(at: now), .unboundedExpiry)
+  }
+
+  func testSharePayloadContainsNoAuthorizationTokenOrCustomHeaders() throws {
+    let payload = Data("audio".utf8)
+    let track = WatchShareTrackDescriptor(
+      index: 0,
+      byteCount: Int64(payload.count),
+      fileExtension: "m4a",
+      integrity: WatchTransferIntegrity(data: payload)
+    )
+    let offer = makeShareOffer(tracks: [track])
+    var lifecycle = WatchShareLifecycle(offer: offer)
+    XCTAssertEqual(
+      lifecycle.recordPartialRange(
+        index: 0,
+        metadata: WatchShareResumeMetadata(
+          receivedByteCount: 2,
+          totalByteCount: Int64(payload.count),
+          entityTag: "v1"
+        )
+      ),
+      .accepted
+    )
+
+    let offerText = try XCTUnwrap(
+      String(data: JSONEncoder().encode(offer), encoding: .utf8)
+    ).lowercased()
+    let lifecycleText = try XCTUnwrap(
+      String(data: JSONEncoder().encode(lifecycle), encoding: .utf8)
+    ).lowercased()
+    let encoded = offerText + lifecycleText
+
+    XCTAssertFalse(encoded.contains("authorization"))
+    XCTAssertFalse(encoded.contains("token"))
+    XCTAssertFalse(encoded.contains("customheaders"))
+  }
+
+  func testShareExpiryAndReplacementAdvanceGeneration() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let offer = makeShareOffer(now: now, expiresAt: now.addingTimeInterval(60))
+    var lifecycle = WatchShareLifecycle(offer: offer)
+
+    XCTAssertEqual(lifecycle.replacementGeneration, 0)
+    XCTAssertTrue(lifecycle.markExpired(at: now.addingTimeInterval(61)))
+    XCTAssertNil(lifecycle.activeURL)
+
+    let replacement = offer.replacing(
+      shareID: "share-2",
+      publicBootstrapURL: URL(string: "https://share.example.test/audiobookshelf/public/share/new")!,
+      expiresAt: now.addingTimeInterval(600)
+    )
+    XCTAssertEqual(replacement.replacementGeneration, 1)
+    XCTAssertTrue(lifecycle.replace(with: replacement, at: now))
+    XCTAssertEqual(lifecycle.lastShareID, "share-2")
+    XCTAssertEqual(lifecycle.activeURL, replacement.publicBootstrapURL)
+    XCTAssertFalse(lifecycle.replace(with: replacement, at: now))
+  }
+
+  func testValidatedCompletedTrackIsReusableAfterShareReplacement() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let data = Data("audio".utf8)
+    let track = WatchShareTrackDescriptor(
+      index: 0,
+      byteCount: Int64(data.count),
+      fileExtension: "m4a",
+      integrity: WatchTransferIntegrity(data: data)
+    )
+    let offer = makeShareOffer(
+      now: now,
+      expiresAt: now.addingTimeInterval(60),
+      tracks: [track]
+    )
+    var lifecycle = WatchShareLifecycle(offer: offer)
+
+    XCTAssertEqual(lifecycle.recordValidatedTrack(index: 0, data: data), .accepted)
+    XCTAssertTrue(lifecycle.isComplete)
+    XCTAssertTrue(lifecycle.markExpired(at: now.addingTimeInterval(61)))
+
+    let replacement = offer.replacing(
+      shareID: "share-2",
+      publicBootstrapURL: URL(string: "https://share.example.test/audiobookshelf/public/share/new")!,
+      expiresAt: now.addingTimeInterval(600)
+    )
+    XCTAssertTrue(lifecycle.replace(with: replacement, at: now))
+    XCTAssertEqual(lifecycle.reusableCompletedTrackIndexes, [0])
+    XCTAssertEqual(lifecycle.missingTrackIndexes, [])
+  }
+
+  func testPartialRangeResumeMetadataTracksPrefixAndValidators() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let track = WatchShareTrackDescriptor(index: 0, byteCount: 100, fileExtension: "m4a")
+    let offer = makeShareOffer(now: now, tracks: [track])
+    var lifecycle = WatchShareLifecycle(offer: offer)
+    let metadata = WatchShareResumeMetadata(
+      receivedByteCount: 40,
+      totalByteCount: 100,
+      entityTag: "etag-1",
+      lastModified: Date(timeIntervalSince1970: 1_799_999_900)
+    )
+
+    XCTAssertTrue(metadata.isPartial)
+    XCTAssertEqual(metadata.rangeHeader, "bytes=40-")
+    XCTAssertNil(metadata.validationError(against: track))
+    XCTAssertEqual(lifecycle.recordPartialRange(index: 0, metadata: metadata), .accepted)
+    XCTAssertEqual(lifecycle.recordPartialRange(index: 0, metadata: metadata), .duplicate)
+    XCTAssertEqual(lifecycle.receipts.first?.resumeMetadata, metadata)
+    XCTAssertEqual(lifecycle.missingTrackIndexes, [0])
+  }
+
+  func testAllTracksMustBeValidatedBeforeCompletion() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let tracks = [
+      WatchShareTrackDescriptor(index: 0, byteCount: 2, fileExtension: "m4a"),
+      WatchShareTrackDescriptor(index: 1, byteCount: 3, fileExtension: "m4a"),
+    ]
+    var lifecycle = WatchShareLifecycle(
+      offer: makeShareOffer(now: now, tracks: tracks)
+    )
+
+    XCTAssertEqual(lifecycle.recordValidatedTrack(index: 1, data: Data("one".utf8)), .accepted)
+    XCTAssertEqual(lifecycle.missingTrackIndexes, [0])
+    XCTAssertFalse(lifecycle.isComplete)
+    XCTAssertEqual(lifecycle.recordValidatedTrack(index: 0, data: Data("0!".utf8)), .accepted)
+    XCTAssertTrue(lifecycle.isComplete)
+    XCTAssertEqual(lifecycle.completedTrackIndexes, [0, 1])
+    XCTAssertTrue(lifecycle.markCompleted())
+    XCTAssertEqual(lifecycle.state, .completed)
+    XCTAssertNil(lifecycle.activeURL)
+    XCTAssertEqual(lifecycle.cleanupPlan?.removePartialTrackFiles, false)
+  }
+
+  func testIntegrityMismatchIsRejectedAndCancellationCleansUpIdempotently() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let expected = Data("audio".utf8)
+    let track = WatchShareTrackDescriptor(
+      index: 0,
+      byteCount: Int64(expected.count),
+      fileExtension: "m4a",
+      integrity: WatchTransferIntegrity(data: expected)
+    )
+    var lifecycle = WatchShareLifecycle(
+      offer: makeShareOffer(now: now, tracks: [track])
+    )
+
+    XCTAssertEqual(
+      lifecycle.recordValidatedTrack(index: 0, data: Data("other".utf8)),
+      .rejected
+    )
+    XCTAssertEqual(lifecycle.recordValidatedTrack(index: 0, data: expected), .accepted)
+    XCTAssertEqual(lifecycle.recordValidatedTrack(index: 0, data: expected), .duplicate)
+
+    let cleanup = lifecycle.cancel()
+    XCTAssertEqual(lifecycle.state, .cancelled)
+    XCTAssertNil(lifecycle.activeURL)
+    XCTAssertEqual(cleanup.shareID, "share-1")
+    XCTAssertTrue(cleanup.removeActiveURL)
+    XCTAssertTrue(cleanup.revokeShare)
+    XCTAssertTrue(cleanup.removePartialTrackFiles)
+    XCTAssertFalse(cleanup.retainValidatedTrackFiles)
+    XCTAssertEqual(lifecycle.cancel(), cleanup)
+  }
+
+  private func makeShareOffer(
+    now: Date = Date(timeIntervalSince1970: 1_800_000_000),
+    shareID: String = "share-1",
+    publicBootstrapURL: URL = URL(
+      string: "https://share.example.test/audiobookshelf/public/share/slug"
+    )!,
+    expiresAt: Date? = nil,
+    tracks: [WatchShareTrackDescriptor] = [
+      WatchShareTrackDescriptor(index: 0, byteCount: 5, fileExtension: "m4a")
+    ]
+  ) -> WatchShareOffer {
+    WatchShareOffer(
+      transferID: "transfer-1",
+      bookID: "book-1",
+      shareID: shareID,
+      publicBootstrapURL: publicBootstrapURL,
+      expiresAt: expiresAt ?? now.addingTimeInterval(3_600),
+      tracks: tracks
+    )
+  }
+
   private func makeTemporaryDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
+  }
+}
+
+extension WatchTransferContractsTests {
+  func testSegmentPlannerSplitsCoversAndFiltersStoredSegments() {
+    let plan = WatchShareSegmentPlanner.plan(totalByteCount: 100, segmentByteCount: 30)
+    XCTAssertEqual(plan.map(\.byteCount), [30, 30, 30, 10])
+    XCTAssertEqual(plan.map(\.startOffset), [0, 30, 60, 90])
+    XCTAssertEqual(plan.last?.rangeHeaderValue, "bytes=90-99")
+    XCTAssertEqual(plan.reduce(0) { $0 + $1.byteCount }, 100)
+
+    XCTAssertTrue(WatchShareSegmentPlanner.plan(totalByteCount: 0).isEmpty)
+    XCTAssertTrue(WatchShareSegmentPlanner.plan(totalByteCount: -5, segmentByteCount: 10).isEmpty)
+    XCTAssertTrue(WatchShareSegmentPlanner.plan(totalByteCount: 100, segmentByteCount: 0).isEmpty)
+
+    let stored: [Int: Int64] = [0: 30, 1: 12, 2: 40]
+    let missing = WatchShareSegmentPlanner.missingSegments(from: plan, storedSegmentByteCounts: stored)
+    // Partial (12/30) and oversized (40/30) segments must both be re-downloaded.
+    XCTAssertEqual(missing.map(\.index), [1, 2, 3])
+    XCTAssertEqual(
+      WatchShareSegmentPlanner.completedByteCount(for: plan, storedSegmentByteCounts: stored),
+      30
+    )
+    XCTAssertEqual(
+      WatchShareSegmentPlanner.completedByteCount(
+        for: plan,
+        storedSegmentByteCounts: [0: 30, 1: 30, 2: 30, 3: 10]
+      ),
+      100
+    )
   }
 }

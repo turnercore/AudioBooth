@@ -79,6 +79,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     return true
   }
 
+  func applicationDidBecomeActive(_ application: UIApplication) {
+    WatchConnectivityManager.shared.syncPhoneDownloadedBooks()
+    Task { @MainActor in
+      await WatchFileTransferCoordinator.shared.cleanupStaleShares()
+    }
+  }
+
   func application(
     _ application: UIApplication,
     handleEventsForBackgroundURLSession identifier: String,
