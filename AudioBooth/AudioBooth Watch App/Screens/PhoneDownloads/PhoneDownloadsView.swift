@@ -5,6 +5,8 @@ import SwiftUI
 
 struct PhoneDownloadsView: View {
   @StateObject var model: Model
+  @ObservedObject private var playerManager = PlayerManager.shared
+  @ObservedObject private var connectivityManager = WatchConnectivityManager.shared
 
   init(model: Model = Model()) {
     _model = StateObject(wrappedValue: model)
@@ -12,6 +14,43 @@ struct PhoneDownloadsView: View {
 
   var body: some View {
     List {
+      if playerManager.isPlayingOnWatch, let current = playerManager.current {
+        Section("Now Playing") {
+          Button {
+            playerManager.isShowingFullPlayer = true
+          } label: {
+            HStack(spacing: 8) {
+              Image(systemName: "waveform")
+                .foregroundStyle(.orange)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(current.title)
+                  .font(.caption2).fontWeight(.medium).lineLimit(1)
+                Text("On Watch — tap to open")
+                  .font(.caption2).foregroundStyle(.secondary)
+              }
+              Spacer()
+              Image(systemName: "play.fill")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+          }
+          .buttonStyle(.plain)
+        }
+      } else if connectivityManager.hasCurrentBook {
+        Section("Now Playing on iPhone") {
+          HStack(spacing: 8) {
+            Image(systemName: "iphone")
+              .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Playing on iPhone")
+                .font(.caption2).fontWeight(.medium).lineLimit(1)
+              Text("Use iPhone controls or open remote")
+                .font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer()
+          }
+        }
+      }
       if model.isEmpty {
         ContentUnavailableView(
           "No Downloads",
@@ -62,7 +101,8 @@ struct PhoneDownloadsView: View {
           title: book.title,
           author: book.authorName,
           coverURL: book.preferredCoverURL,
-          isDownloaded: true
+          isDownloaded: true,
+          progress: book.progress
         )
       }
       .buttonStyle(.plain)
@@ -81,14 +121,16 @@ struct PhoneDownloadsView: View {
         title: book.title,
         author: book.authorName,
         coverURL: model.catalogArtworkURL(for: book.bookID),
-        isDownloaded: false
+        isDownloaded: false,
+        progress: book.progress
       )
-      progress(value: book.progress, label: model.progressText(current: book.currentTime, duration: book.duration))
       if let byteProgress = model.transferProgress(for: book) {
         transferProgress(
           value: byteProgress,
           label: model.transferProgressText(byteProgress)
         )
+      } else {
+        progress(value: book.progress, label: model.progressText(current: book.currentTime, duration: book.duration))
       }
       HStack {
         Text(model.stateText(for: book))
@@ -110,23 +152,33 @@ struct PhoneDownloadsView: View {
     title: String,
     author: String?,
     coverURL: URL?,
-    isDownloaded: Bool
+    isDownloaded: Bool,
+    progress: Double = 0
   ) -> some View {
     HStack(spacing: 8) {
-      LazyImage(url: coverURL) { state in
-        if let image = state.image {
-          image.resizable().aspectRatio(contentMode: .fill)
-        } else {
-          Image(systemName: "book.closed.fill")
-            .resizable()
-            .scaledToFit()
-            .padding(8)
-            .foregroundStyle(.secondary)
-            .background(.quaternary)
+      ZStack {
+        LazyImage(url: coverURL) { state in
+          if let image = state.image {
+            image.resizable().aspectRatio(contentMode: .fill)
+          } else {
+            Image(systemName: "book.closed.fill")
+              .resizable()
+              .scaledToFit()
+              .padding(8)
+              .foregroundStyle(.secondary)
+              .background(.quaternary)
+          }
         }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        Circle()
+          .trim(from: 0, to: min(1, max(0, progress)))
+          .stroke(progress >= 1 ? Color.green : Color.orange, lineWidth: 2)
+          .frame(width: 48, height: 48)
+          .rotationEffect(.degrees(-90))
+          .opacity(progress > 0.01 ? 1 : 0)
       }
-      .frame(width: 44, height: 44)
-      .clipShape(RoundedRectangle(cornerRadius: 6))
+      .frame(width: 48, height: 48)
 
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 4) {
