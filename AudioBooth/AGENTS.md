@@ -18,6 +18,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Resuming after a completed sleep timer clears it without implicitly extending or auto-rearming it; extension remains an explicit alert or shake action.
 - Do not persist auth tokens or custom secret headers in plaintext storage unless an existing platform constraint forces it and the risk is documented.
 - Watch audiobook bootstrap uses bounded public media shares created and revoked by the authenticated iPhone. Send only the public hostname/base path, share identity/expiry, and expected local-manifest tracks; phone relay remains a fallback.
+- Watch Downloads list is simple and glanceable: Now Playing (local or iPhone remote) always top, On Watch / Available on iPhone grouped by lastPlayedAt, cover shows 48pt circular progress ring, each row has one inline progress line (transfer MB/% or listen %) and a debounced capsule action (Transfer/Scheduling…/Cancel/Retry); no fake Paused/Resume and no Next chapter quick action on Watch.
 - Keep expensive filesystem and SwiftData work off the main actor where possible.
 - Do not commit `AudioBooth/Local.xcconfig`.
 - Preserve the personal app identifiers, `group.com.turnercore.audioBS` app-group setup, and intentionally absent CarPlay entitlement unless the user explicitly requests a signing or capability change.

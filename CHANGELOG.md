@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sleep timer pause behavior - Configurable sleep timer behavior when playback is paused (thanks @fivezeroes)
 
 ### Changed
+- Watch downloads UI - Cover now shows a circular progress ring (48pt, orange/green), each row has one inline progress line (transfer MB/% or listen %), Now Playing sits at the top, and Transfer debounces to Scheduling… to prevent double-taps
 - Search experience - Normalize whitespace, reduce input debounce, label close matches, and expose narrator search consistently
 - Home shelves - Show up to 20 Recently Added books and Recent Series while preserving the server's recent-series rules
 - Downloads revamp - Full revamp of how downloads are handled, with improved multi-track and background downloads, the ability to resume failed downloads, and better overall stability
