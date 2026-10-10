@@ -45,6 +45,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Use `xcodebuild -project AudioBooth/AudioBooth.xcodeproj -scheme AudioBooth -destination 'generic/platform=iOS' -configuration Debug build CODE_SIGNING_ALLOWED=NO` for broad compile validation.
 - Use the `AudioBoothTests` target through the shared `AudioBooth` scheme for focused iOS unit tests; `build-for-testing` against `generic/platform=iOS` provides a device-independent compile check.
 - Upstream hinge observation requires an SDK exposing `onHingeChange`; enable `AUDIOBOOTH_HINGE_SDK` only with that SDK. Xcode 26.6 builds leave hinge observation disabled.
+- Run app regressions with `xcodebuild -project AudioBooth/AudioBooth.xcodeproj -scheme AudioBooth -destination 'platform=iOS Simulator,name=AudioBooth Tests' -parallel-testing-enabled NO test CODE_SIGN_IDENTITY=-`. Do not disable simulator signing: the test host requires app-group entitlements at launch.
 - Simulator testing may depend on local CoreSimulator/Xcode health.
 - Test watch/widget behavior when changing watch connectivity, app groups, timelines, or shared defaults.
 
