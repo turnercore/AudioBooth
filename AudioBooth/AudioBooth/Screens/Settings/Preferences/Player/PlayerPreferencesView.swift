@@ -64,25 +64,33 @@ struct PlayerPreferencesView: View {
           )
         }
         .listRowBackground(theme.colors.background.card)
+
+        Toggle(isOn: $preferences.positionSyncOffers) {
+          PreferenceRow(
+            systemImage: "book.pages",
+            tint: .orange,
+            title: "Offer to Catch Up",
+            subtitle: "Suggest skipping ahead when you've read further than you've listened"
+          )
+        }
+        .listRowBackground(theme.colors.background.card)
       } header: {
         Text("Behavior")
       }
 
       Section {
-        Toggle(isOn: $preferences.smartContinuePlayback) {
+        NavigationLink {
+          UpNextPreferencesView()
+        } label: {
           PreferenceRow(
-            systemImage: "wand.and.stars",
-            tint: .indigo,
-            title: "Smart Continue",
-            subtitle: "Automatically play the next book in the series, downloaded book, or podcast episode"
+            systemImage: "forward.end.alt",
+            tint: .teal,
+            title: "Up Next",
+            subtitle: "Queue and Smart Continue"
           )
         }
         .listRowBackground(theme.colors.background.card)
-      } header: {
-        Text("Up Next")
-      }
 
-      Section {
         NavigationLink {
           ControlsLayoutPreferencesView()
         } label: {
@@ -148,7 +156,7 @@ struct PlayerPreferencesView: View {
       }
     }
     .scrollContentBackground(.hidden)
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle("Player")
   }
 

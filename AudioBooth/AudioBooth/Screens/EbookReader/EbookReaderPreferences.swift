@@ -14,7 +14,7 @@ enum EbookTapAction: String, CaseIterable, Identifiable, Codable {
 
   var id: String { rawValue }
 
-  var label: String {
+  var label: LocalizedStringResource {
     switch self {
     case .previousPage: "Previous Page"
     case .nextPage: "Next Page"
@@ -72,6 +72,9 @@ class EbookReaderPreferences: ObservableObject {
   @AppStorage("ebookReader.useVolumeButtonsForPageTurn") var useVolumeButtonsForPageTurn: Bool = false
   @AppStorage("ebookReader.autoScrollSpeed") var autoScrollSpeed: Double = 0.0
   @AppStorage("ebookReader.progressDisplay") var progressDisplay: EbookProgressDisplay = .percent
+
+  @AppStorage("ebookReader.readAlongFollows") var readAlongFollowsNarration: Bool = true
+  @AppStorage("ebookReader.readAlongHighlightsWord") var readAlongHighlightsWord: Bool = true
 
   @AppStorage("ebookReader.tapZonesData") private var tapZonesData: Data = Data()
 
@@ -154,7 +157,7 @@ class EbookReaderPreferences: ObservableObject {
 
     var id: String { rawValue }
 
-    var label: String {
+    var label: LocalizedStringResource {
       switch self {
       case .auto: "Auto"
       case .one: "1 Column"

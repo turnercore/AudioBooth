@@ -9,8 +9,10 @@ public final class Audiobookshelf {
 
   public lazy var authentication = AuthenticationService(audiobookshelf: self)
   public lazy var libraries = LibrariesService(audiobookshelf: self)
+  public lazy var filterData = FilterDataService(audiobookshelf: self)
   public lazy var sessions = SessionService(audiobookshelf: self)
   public lazy var books = BooksService(audiobookshelf: self)
+  public lazy var progress = ProgressService(audiobookshelf: self)
   public lazy var podcasts = PodcastsService(audiobookshelf: self)
   public lazy var series = SeriesService(audiobookshelf: self)
   public lazy var authors = AuthorsService(audiobookshelf: self)
@@ -58,14 +60,7 @@ public final class Audiobookshelf {
   }
 
   func setupImagePipeline() {
-    ImagePipeline.shared = ImagePipeline {
-      let configuration = DataLoader.defaultConfiguration
-      configuration.urlCache = nil
-      configuration.waitsForConnectivity = true
-      configuration.httpAdditionalHeaders = authentication.server?.customHeaders
-      $0.dataLoader = DataLoader(configuration: configuration)
-      $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.images")
-    }
+    ImagePipeline.shared = .audioBooth(customHeaders: authentication.server?.customHeaders)
   }
 
   public func switchToServer(_ serverID: String) async throws {

@@ -5,20 +5,26 @@ import Logging
 final class FilterPickerModel: FilterPicker.Model {
   private let audiobookshelf = Audiobookshelf.shared
 
-  init(currentFilter: LibraryPageModel.Filter?) {
+  var onFilterSelected: ((FilterPicker.Model.Filter?) -> Void)?
+
+  init(currentFilter: FilterPicker.Model.Filter?, source: Source) {
     super.init(
+      source: source,
       progressOptions: ["Finished", "In Progress", "Not Started", "Not Finished"],
       selectedFilter: currentFilter
     )
 
-    Task {
-      await fetchFilterData()
+    if let cached = audiobookshelf.filterData.cached() {
+      applyFilterData(cached)
     }
   }
 
-  override func onFilterChanged(_ filter: LibraryPageModel.Filter?) {
+  override func onFilterChanged(_ filter: FilterPicker.Model.Filter?) {
     selectedFilter = filter
-    UserPreferences.shared.libraryFilter = filter ?? .all
+    if source != .series {
+      UserPreferences.shared.libraryFilter = filter ?? .all
+    }
+    onFilterSelected?(filter)
   }
 
   override func refresh() async {
@@ -26,12 +32,8 @@ final class FilterPickerModel: FilterPicker.Model {
   }
 
   private func fetchFilterData() async {
-    if let cached = audiobookshelf.libraries.getCachedFilterData() {
-      applyFilterData(cached)
-    }
-
     do {
-      let data = try await audiobookshelf.libraries.fetchFilterData()
+      let data = try await audiobookshelf.filterData.fetch()
       applyFilterData(data)
     } catch {
       AppLogger.viewModel.error("Failed to fetch filter data: \(error)")

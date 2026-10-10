@@ -290,8 +290,7 @@ extension PhoneDownloadsView {
     func refresh() { connectivityManager.requestPhoneDownloads() }
 
     func play(_ book: WatchBook) {
-      PlayerManager.shared.setCurrent(book)
-      PlayerManager.shared.isShowingFullPlayer = true
+      PlayerManager.shared.open(book)
     }
 
     func remove(_ book: WatchBook) {

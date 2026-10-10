@@ -6,7 +6,7 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
 
   private var fetched: [LibraryView.Item] = []
   private var sortBy: SortBy = .title
-  private var filter: LibraryPageModel.Filter?
+  private var filter: FilterPicker.Model.Filter?
 
   private var currentPage: Int = 0
   private var isLoadingNextPage: Bool = false
@@ -26,7 +26,7 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
     )
 
     kind = .podcasts
-    self.filters = FilterPickerModel(currentFilter: filter)
+    self.filters = FilterPickerModel(currentFilter: filter, source: .podcasts)
   }
 
   init(destination: NavigationDestination) {
@@ -122,7 +122,7 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
     showingFilterSelection = true
   }
 
-  override func onFilterPreferenceChanged(_ newFilter: LibraryPageModel.Filter) {
+  override func onFilterPreferenceChanged(_ newFilter: FilterPicker.Model.Filter) {
     let resolved = newFilter == .all ? nil : newFilter
     guard filter != resolved else { return }
 
@@ -156,6 +156,8 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
         let id = name.lowercased().replacingOccurrences(of: " ", with: "-")
         let encoded = Data(id.utf8).base64EncodedString()
         filterString = "progress.\(encoded)"
+      case .explicit:
+        filterString = "explicit"
       case .all, nil:
         filterString = nil
       default:

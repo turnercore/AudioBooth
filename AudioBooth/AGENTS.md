@@ -32,6 +32,8 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - For playback changes, inspect `PlayerManager`, `BookPlayerModel`, `SessionManager`, widgets, and watch sync call sites before editing.
 - For downloads/offline changes, inspect `DownloadManager`, `DownloadRequest`, `StorageManager`, local media models, and app-group paths together; verify foreground/network resume and background task reattachment.
 - For auth/server changes, inspect API services, OIDC flow, custom headers, watch connectivity, and logging together.
+- Ebook read-along, page matching, and position sync live in the corresponding `Services/` and `Screens/` folders; transcription and matching stay on device.
+- iPhone “Download to Watch” uses the personal share-primary transfer coordinator with chunked fallback and requires a local audiobook download first.
 - For UI changes, follow existing SwiftUI view/model structure and avoid broad restyling.
 - For library search changes, preserve server matches and use cached filter data only as a conservative fuzzy fallback.
 - Keep Home personalized-shelf loading independent from user progress synchronization so one failure cannot leave all shelves stale.
@@ -42,6 +44,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 
 - Use `xcodebuild -project AudioBooth/AudioBooth.xcodeproj -scheme AudioBooth -destination 'generic/platform=iOS' -configuration Debug build CODE_SIGNING_ALLOWED=NO` for broad compile validation.
 - Use the `AudioBoothTests` target through the shared `AudioBooth` scheme for focused iOS unit tests; `build-for-testing` against `generic/platform=iOS` provides a device-independent compile check.
+- Upstream hinge observation requires an SDK exposing `onHingeChange`; enable `AUDIOBOOTH_HINGE_SDK` only with that SDK. Xcode 26.6 builds leave hinge observation disabled.
 - Simulator testing may depend on local CoreSimulator/Xcode health.
 - Test watch/widget behavior when changing watch connectivity, app groups, timelines, or shared defaults.
 

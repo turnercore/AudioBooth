@@ -24,7 +24,9 @@ public final class LocalBook {
   public var language: String?
   public var displayOrder: Int = 0
   public var createdAt: Date = Date()
+  public var downloadedAt: Date?
   public var ebookFile: URL?
+  public var coverFile: URL?
 
   public var authorNames: String {
     authors.map(\.name).joined(separator: ", ")
@@ -68,11 +70,29 @@ public final class LocalBook {
     return fileURL
   }
 
+  public var localCoverURL: URL? {
+    guard let coverFile else { return nil }
+
+    guard
+      let appGroupURL = FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
+      )
+    else {
+      return nil
+    }
+
+    let fileURL = appGroupURL.appendingPathComponent(coverFile.relativePath)
+    guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+    return fileURL
+  }
+
   public func coverURL(raw: Bool = false) -> URL? {
+    if let localCoverURL { return localCoverURL }
+
     guard var url = coverURL else { return nil }
 
     #if os(watchOS)
-    url.append(queryItems: [URLQueryItem(name: "format", value: "jpg")])
+    url.append(queryItems: [URLQueryItem(name: "format", value: "jpeg")])
     #else
     if raw {
       url.append(queryItems: [URLQueryItem(name: "raw", value: "1")])
@@ -104,6 +124,7 @@ public final class LocalBook {
     language: String? = nil,
     displayOrder: Int = Int(Date().timeIntervalSince1970 * 1000),
     createdAt: Date = Date(),
+    downloadedAt: Date? = nil,
     ebookFile: URL? = nil
   ) {
     self.bookID = bookID
@@ -127,6 +148,7 @@ public final class LocalBook {
     self.language = language
     self.displayOrder = displayOrder
     self.createdAt = createdAt
+    self.downloadedAt = downloadedAt
     self.ebookFile = ebookFile
   }
 }
@@ -151,36 +173,52 @@ extension LocalBook {
   public func save() throws {
     let context = ModelContextProvider.shared.context
 
-    if let existingItem = try LocalBook.fetch(bookID: self.bookID) {
-      existingItem.libraryID = self.libraryID
-      existingItem.title = self.title
-      existingItem.authors = self.authors
-      existingItem.narrators = self.narrators
-      existingItem.series = self.series
-      existingItem.coverURL = self.coverURL
-      existingItem.duration = self.duration
-      existingItem.chapters = self.chapters
-      existingItem.publishedYear = self.publishedYear
-      existingItem.subtitle = self.subtitle
-      existingItem.bookDescription = self.bookDescription
-      existingItem.genres = self.genres
-      existingItem.tags = self.tags
-      existingItem.isExplicit = self.isExplicit
-      existingItem.isAbridged = self.isAbridged
-      existingItem.publisher = self.publisher
-      existingItem.language = self.language
-      existingItem.ebookFile = self.ebookFile ?? existingItem.ebookFile
+    guard modelContext == nil else {
+      try context.save()
+      return
+    }
 
-      var mergedTracks: [Track] = []
-      for newTrack in self.tracks {
-        if let existingTrack = existingItem.tracks.first(where: { $0.index == newTrack.index }) {
-          newTrack.relativePath = newTrack.relativePath ?? existingTrack.relativePath
-        }
-        mergedTracks.append(newTrack)
-      }
-      existingItem.tracks = mergedTracks
-    } else {
+    guard let existingItem = try LocalBook.fetch(bookID: bookID) else {
       context.insert(self)
+      try context.save()
+      return
+    }
+
+    if #unavailable(iOS 18, watchOS 11, tvOS 18, macOS 15) {
+      bookID = UUID().uuidString
+      context.insert(self)
+    }
+
+    existingItem.libraryID = libraryID
+    existingItem.title = title
+    existingItem.authors = authors
+    existingItem.narrators = narrators
+    existingItem.series = series
+    if existingItem.coverURL != coverURL {
+      existingItem.coverFile = nil
+    }
+    existingItem.coverURL = coverURL
+    existingItem.duration = duration
+    existingItem.chapters = chapters
+    existingItem.publishedYear = publishedYear
+    existingItem.subtitle = subtitle
+    existingItem.bookDescription = bookDescription
+    existingItem.genres = genres
+    existingItem.tags = tags
+    existingItem.isExplicit = isExplicit
+    existingItem.isAbridged = isAbridged
+    existingItem.publisher = publisher
+    existingItem.language = language
+    existingItem.downloadedAt = downloadedAt ?? existingItem.downloadedAt
+    existingItem.ebookFile = ebookFile ?? existingItem.ebookFile
+    existingItem.coverFile = coverFile ?? existingItem.coverFile
+
+    if existingItem.tracks.allSatisfy({ $0.relativePath == nil }) {
+      existingItem.tracks = tracks
+    }
+
+    if #unavailable(iOS 18, watchOS 11, tvOS 18, macOS 15) {
+      context.delete(self)
     }
 
     try context.save()

@@ -48,8 +48,8 @@ struct LibraryPage: View {
         }
       }
     }
-    .background(theme.colors.background.page)
-    .navigationTitle(model.isSelecting ? selectionTitle : model.title)
+    .background(theme.colors.background.page.ignoresSafeArea())
+    .navigationTitle(navigationTitle)
     .sheet(isPresented: $model.showingFilterSelection) {
       if let filters = model.filters {
         NavigationStack {
@@ -76,8 +76,8 @@ struct LibraryPage: View {
             model.onFilterButtonTapped()
           } label: {
             Label(
-              filterButtonLabel ?? "All",
-              systemImage: filterButtonLabel == nil
+              model.filters?.selectedFilter?.title ?? "All",
+              systemImage: model.filters?.selectedFilter?.title == nil
                 ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill"
             )
           }
@@ -128,7 +128,7 @@ struct LibraryPage: View {
               }
             )
           ) {
-            Label("List View", systemImage: "rectangle.grid.1x3")
+            Label("List View", systemImage: "rectangle.grid.1x2")
           }
 
           if model.isSelecting {
@@ -311,29 +311,21 @@ struct LibraryPage: View {
     model.actions.contains(.playAll) && !model.items.isEmpty && (!model.isSelecting || hasSelection)
   }
 
+  var navigationTitle: String {
+    if model.isRoot {
+      ""
+    } else if model.isSelecting {
+      selectionTitle
+    } else {
+      model.title
+    }
+  }
+
   var selectionTitle: String {
     if model.selectedIDs.isEmpty {
       String(localized: "Select Items")
     } else {
       String(localized: "\(model.selectedIDs.count) Selected")
-    }
-  }
-
-  var filterButtonLabel: String? {
-    switch model.filters?.selectedFilter {
-    case .all: return nil
-    case .explicit: return "Explicit"
-    case .abridged: return "Abridged"
-    case .progress(let name): return name
-    case .authors(_, let name): return name
-    case .series(_, let name): return name
-    case .narrators(let name): return name
-    case .genres(let name): return name
-    case .tags(let name): return name
-    case .languages(let name): return name
-    case .publishers(let name): return name
-    case .publishedDecades(let decade): return decade
-    case nil: return nil
     }
   }
 }
@@ -400,7 +392,7 @@ extension LibraryPage {
     func onResetAllProgressTapped() {}
     func onMarkAllFinishedTapped() {}
     func onFilterButtonTapped() {}
-    func onFilterPreferenceChanged(_ filter: LibraryPageModel.Filter) {}
+    func onFilterPreferenceChanged(_ filter: FilterPicker.Model.Filter) {}
     func onSelectTapped() {}
     func onCancelSelectTapped() {}
     func onSelectAllTapped() {}

@@ -216,7 +216,7 @@ final class ServerViewModel: ServerView.Model {
 
     authModel.isLoading = true
     let normalizedURL = buildFullServerURL()
-    let headers = Dictionary(uniqueKeysWithValues: customHeaders.headers.map { ($0.key, $0.value) })
+    let headers = customHeaders.dictionary
 
     Task {
       do {
@@ -252,7 +252,7 @@ final class ServerViewModel: ServerView.Model {
 
     authModel.isLoading = true
     let normalizedURL = buildFullServerURL()
-    let headers = Dictionary(uniqueKeysWithValues: customHeaders.headers.map { ($0.key, $0.value) })
+    let headers = customHeaders.dictionary
 
     Task {
       do {
@@ -286,7 +286,7 @@ final class ServerViewModel: ServerView.Model {
     }
 
     let normalizedURL = buildFullServerURL()
-    let headers = Dictionary(uniqueKeysWithValues: customHeaders.headers.map { ($0.key, $0.value) })
+    let headers = customHeaders.dictionary
 
     authModel.isLoading = true
 
@@ -348,6 +348,8 @@ final class ServerViewModel: ServerView.Model {
     let connectionID = pendingConnectionID ?? server?.id
     guard let connectionID else { return }
 
+    let isFirstServer = audiobookshelf.authentication.servers.count <= 1
+
     if audiobookshelf.authentication.server?.id != connectionID {
       Task {
         do {
@@ -356,7 +358,12 @@ final class ServerViewModel: ServerView.Model {
           audiobookshelf.libraries.current = value
           selectedLibrary = library
           pendingConnectionID = nil
-          Toast(success: "Switched to server and selected library").show()
+
+          if isFirstServer {
+            Toast(success: "Connected to server").show()
+          } else {
+            Toast(success: "Switched to server and selected library").show()
+          }
         } catch {
           AppLogger.viewModel.error("Failed to switch server: \(error.localizedDescription)")
           Toast(error: "Failed to switch server").show()
@@ -389,7 +396,7 @@ final class ServerViewModel: ServerView.Model {
 
     Task {
       do {
-        let headers = Dictionary(uniqueKeysWithValues: customHeaders.headers.map { ($0.key, $0.value) })
+        let headers = customHeaders.dictionary
 
         let status = try await audiobookshelf.networkDiscovery.fetchServerStatus(
           serverURL: serverURL,

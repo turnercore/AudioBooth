@@ -24,6 +24,7 @@ Audiobookshelf client package for authentication, network requests, service APIs
 ## Work Guidance
 
 - Prefer small service methods over new global managers.
+- Use `ProgressService` for remote playback/ebook progress and `FilterDataService` for filter data; legacy library filter methods forward to the filter service for personal search compatibility.
 - When changing token refresh, check `CredentialsActor`, `AuthenticationService`, and `NetworkService` together.
 - When changing request headers, check image loading, watch connectivity, and custom headers.
 - Keep local HTTP support intentional and visible; do not silently downgrade credentialed requests.

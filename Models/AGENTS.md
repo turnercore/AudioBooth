@@ -25,6 +25,7 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 - Read `Models/Sources/Models/AudiobookshelfSchema.swift` before schema changes.
 - Check all app/widget/watch callers before changing public model fields.
 - Keep filesystem path helpers minimal and app-group aware.
+- Resolve downloaded book/episode covers from `group.com.turnercore.audioBS`; keep cover and download timestamps optional for existing stores.
 - For observation helpers, avoid unbounded main-actor work and make cancellation explicit.
 
 ## Verification

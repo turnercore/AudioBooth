@@ -83,7 +83,7 @@ final class BookCardContextMenuModel: BookCardContextMenu.Model {
     self.onProgressChanged = onProgressChanged
     self.onRemoveFromContinueListening = onRemoveFromContinueListening
 
-    lazy var filterData = Audiobookshelf.shared.libraries.getCachedFilterData()
+    let filterData = Audiobookshelf.shared.filterData
 
     let authorInfo: BookCard.Author? = {
       if let firstAuthor = item.media.metadata.authors?.first {
@@ -92,10 +92,7 @@ final class BookCardContextMenuModel: BookCardContextMenu.Model {
         let name = authorName.split(separator: ",").first.map {
           String($0.trimmingCharacters(in: .whitespaces))
         }
-        if let name,
-          let filterData,
-          let author = filterData.authors.first(where: { $0.name == name })
-        {
+        if let name, let author = filterData.author(named: name) {
           return BookCard.Author(id: author.id, name: author.name)
         }
       }
@@ -131,9 +128,7 @@ final class BookCardContextMenuModel: BookCardContextMenu.Model {
             cleanedName = name
           }
 
-          if let filterData,
-            let series = filterData.series.first(where: { $0.name == cleanedName })
-          {
+          if let series = filterData.series(named: cleanedName) {
             return BookCard.Series(id: series.id, name: series.name)
           }
         }
@@ -287,23 +282,28 @@ final class BookCardContextMenuModel: BookCardContextMenu.Model {
   }
 
   override func onRemoveFromContinueListeningTapped() {
+    if playerManager.current?.id == item.bookID {
+      isConfirmingRemoveFromContinueListening = true
+    } else {
+      removeFromContinueListening()
+    }
+  }
+
+  override func onRemoveFromContinueListeningConfirmed() {
+    playerManager.clearCurrent()
+    removeFromContinueListening()
+  }
+
+  private func removeFromContinueListening() {
     guard let onRemoveFromContinueListening else { return }
 
-    let bookID: String
-    switch item {
-    case .local(let localBook):
-      bookID = localBook.bookID
-    case .remote(let book):
-      bookID = book.id
-    }
-
     guard
-      let progress = try? MediaProgress.fetch(bookID: bookID),
+      let progress = try? MediaProgress.fetch(bookID: item.bookID),
       let id = progress.id
     else { return }
 
     Task {
-      try? await Audiobookshelf.shared.sessions.removeFromContinueListening(id)
+      try? await Audiobookshelf.shared.progress.removeFromContinueListening(id)
       onRemoveFromContinueListening()
     }
   }

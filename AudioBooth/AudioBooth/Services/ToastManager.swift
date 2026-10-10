@@ -12,80 +12,100 @@ public struct Toast {
     case info
   }
 
-  private static var toasts = [UUID: Toast]()
+  private static var window: PassThroughWindow?
+  private static var model: ToastPage.Model?
+  private static var dismissTask: Task<Void, Never>?
 
-  public init(error message: String) {
-    self.message = message
+  public init(error message: LocalizedStringResource) {
+    self.init(error: String(localized: message))
+  }
+
+  @_disfavoredOverload
+  public init<S: StringProtocol>(error message: S) {
+    self.message = String(message)
     self.type = .error
   }
 
-  public init(success message: String) {
-    self.message = message
+  public init(success message: LocalizedStringResource) {
+    self.init(success: String(localized: message))
+  }
+
+  @_disfavoredOverload
+  public init<S: StringProtocol>(success message: S) {
+    self.message = String(message)
     self.type = .success
   }
 
-  public init(message: String) {
-    self.message = message
+  public init(message: LocalizedStringResource) {
+    self.init(message: String(localized: message))
+  }
+
+  @_disfavoredOverload
+  public init<S: StringProtocol>(message: S) {
+    self.message = String(message)
     self.type = .info
   }
 
   public func show() {
-    for toast in Toast.toasts {
-      toast.value.dismiss()
+    Toast.hide()
+
+    let window: PassThroughWindow
+    if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+      window = PassThroughWindow(windowScene: windowScene)
+    } else {
+      window = PassThroughWindow()
     }
+    window.backgroundColor = .clear
+    window.windowLevel = .alert
 
-    let id = UUID()
-    Toast.toasts[id] = self
+    let model = ToastPage.Model()
+    model.onDismiss = { Toast.hide() }
+    window.model = model
 
-    Task { @MainActor in
-      let window: UIWindow
-      if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-        window = PassThroughWindow(windowScene: windowScene)
-      } else {
-        window = PassThroughWindow()
+    let rootViewController = UIHostingController(rootView: ToastPage(toast: self, model: model))
+    rootViewController.view.backgroundColor = .clear
+    window.rootViewController = rootViewController
+    window.isHidden = false
+
+    Toast.window = window
+    Toast.model = model
+
+    let duration: TimeInterval =
+      switch type {
+      case .error: 5
+      case .success: 3
+      case .info: 2
       }
-      window.backgroundColor = .clear
-      window.windowLevel = .alert
 
-      let model = ToastPage.Model()
-      let rootView = ToastPage(toast: self, model: model)
-      let rootViewController = UIHostingController(rootView: rootView)
-      rootViewController.view.backgroundColor = .clear
-      window.rootViewController = rootViewController
-      window.isHidden = false
-
-      let duration: TimeInterval =
-        switch type {
-        case .error: 5
-        case .success: 3
-        case .info: 2
-        }
+    Toast.dismissTask = Task {
       try? await Task.sleep(for: .seconds(duration))
-      model.visible = false
-      try? await Task.sleep(for: .seconds(0.2))
-
-      Toast.toasts[id] = nil
+      guard !Task.isCancelled else { return }
+      Toast.hide()
     }
   }
 
-  func dismiss() {
-    if let entry = Toast.toasts.first(where: { $0.value.message == message }) {
-      Toast.toasts[entry.key] = nil
+  static func hide() {
+    dismissTask?.cancel()
+    dismissTask = nil
+
+    guard let window, let model else { return }
+    Toast.window = nil
+    Toast.model = nil
+
+    model.visible = false
+
+    Task {
+      try? await Task.sleep(for: .seconds(0.4))
+      window.isHidden = true
     }
   }
 
   private final class PassThroughWindow: UIWindow {
+    var model: ToastPage.Model?
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-      guard let rootView = rootViewController?.view else { return nil }
-
-      for subview in rootView.subviews {
-        let relativePoint = convert(point, to: subview)
-        if subview.bounds.contains(relativePoint) {
-          return super.hitTest(point, with: event)
-        }
-      }
-
-      return nil
+      guard let model, model.visible, model.touchableFrame.contains(point) else { return nil }
+      return super.hitTest(point, with: event)
     }
   }
 }
@@ -97,13 +117,25 @@ struct ToastPage: View {
 
   class Model: ObservableObject {
     @Published var visible: Bool = false
+
+    var touchableFrame: CGRect = .zero
+    var onDismiss: () -> Void = {}
   }
 
   var body: some View {
     GeometryReader { geometry in
       VStack {
         if model.visible {
-          ToastView(toast: toast, onDismiss: { model.visible = false })
+          ToastView(toast: toast, onDismiss: model.onDismiss)
+            .background {
+              GeometryReader { proxy in
+                Color.clear
+                  .onAppear { model.touchableFrame = proxy.frame(in: .global) }
+                  .onChange(of: proxy.frame(in: .global)) { _, frame in
+                    model.touchableFrame = frame
+                  }
+              }
+            }
             .padding(.top, max(geometry.safeAreaInsets.top, 50))
             .transition(.move(edge: .top).combined(with: .opacity))
         }
@@ -119,7 +151,7 @@ struct ToastPage: View {
       .gesture(
         DragGesture(minimumDistance: 3.0, coordinateSpace: .local).onEnded { value in
           if -100...100 ~= value.translation.width, value.translation.height < 0 {
-            model.visible = false
+            model.onDismiss()
           }
         }
       )
@@ -238,8 +270,8 @@ struct ToastView: View {
 
 #Preview {
   VStack(spacing: 20) {
-    ToastView(toast: Toast(error: "Something went wrong!")) {}
-    ToastView(toast: Toast(success: "Success!")) {}
+    ToastView(toast: Toast(error: String("Something went wrong!"))) {}
+    ToastView(toast: Toast(success: String("Success!"))) {}
   }
   .padding()
 }

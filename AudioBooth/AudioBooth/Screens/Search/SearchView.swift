@@ -5,29 +5,26 @@ import SwiftUI
 @available(iOS 26.0, *)
 struct SearchPage: View {
   @StateObject var model: SearchView.Model
-  @FocusState private var fieldFocused: Bool
 
   var body: some View {
     NavigationStack {
       SearchView(model: model)
-        .searchable(text: $model.searchText)
-        .searchFocused($fieldFocused)
-        .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
-        .onAppear {
-          if !model.hasSearchQuery {
-            fieldFocused = true
-          }
-        }
+        .navigationDestinations()
     }
+    .searchable(text: $model.searchText)
   }
 }
 
 struct SearchView: View {
   @ObservedObject var model: Model
+  @Environment(\.appTheme) var theme
+
   var body: some View {
     ScrollView {
       content
     }
+    .frame(maxWidth: .infinity)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .scrollDismissesKeyboard(.interactively)
     .onAppear {
       model.onSearchChanged(model.searchText)

@@ -4,6 +4,7 @@ import Foundation
 import Logging
 import Models
 import Network
+import Nuke
 import Pulse
 import SwiftData
 import UIKit
@@ -38,6 +39,10 @@ final class DownloadManager: NSObject, ObservableObject {
     "\(serverID)/episodes/\(podcastID)/\(episodeID)"
   }
 
+  nonisolated static func coverPath(serverID: String, itemID: String) -> String {
+    "\(serverID)/covers/\(itemID).jpg"
+  }
+
   nonisolated static func audiobookDirectory(serverID: String, bookID: String) -> URL {
     appGroupContainer.appendingPathComponent(audiobookPath(serverID: serverID, bookID: bookID))
   }
@@ -50,6 +55,10 @@ final class DownloadManager: NSObject, ObservableObject {
     appGroupContainer.appendingPathComponent(
       episodePath(serverID: serverID, podcastID: podcastID, episodeID: episodeID)
     )
+  }
+
+  nonisolated static func coverFile(serverID: String, itemID: String) -> URL {
+    appGroupContainer.appendingPathComponent(coverPath(serverID: serverID, itemID: itemID))
   }
 
   enum DownloadState: Equatable {
@@ -232,7 +241,8 @@ final class DownloadManager: NSObject, ObservableObject {
   }
 
   func resumeOutstandingRequests() {
-    guard NetworkMonitor.shared.interfaceType == .wifi,
+    guard Audiobookshelf.shared.libraries.current != nil,
+      NetworkMonitor.shared.interfaceType == .wifi,
       let serverID = Audiobookshelf.shared.authentication.server?.id,
       ModelContextProvider.shared.activeServerID == serverID
     else { return }
@@ -286,24 +296,27 @@ final class DownloadManager: NSObject, ObservableObject {
     if let books = try? LocalBook.fetchAll() {
       for book in books {
         if case .downloading = downloadStates[book.bookID] { continue }
-        downloadStates[book.bookID] = book.isDownloaded ? .downloaded : .notDownloaded
+        downloadStates[book.bookID] = persistedState(for: book.bookID)
       }
     }
 
     if let episodes = try? LocalEpisode.fetchAll() {
       for episode in episodes {
         if case .downloading = downloadStates[episode.episodeID] { continue }
-        downloadStates[episode.episodeID] = episode.isDownloaded ? .downloaded : .notDownloaded
+        downloadStates[episode.episodeID] = persistedState(for: episode.episodeID)
       }
     }
   }
 
   private func persistedState(for id: String) -> DownloadState {
-    if let book = try? LocalBook.fetch(bookID: id) {
-      return book.isDownloaded ? .downloaded : .notDownloaded
+    if let book = try? LocalBook.fetch(bookID: id), book.isDownloaded {
+      return .downloaded
     }
-    if let episode = try? LocalEpisode.fetch(episodeID: id) {
-      return episode.isDownloaded ? .downloaded : .notDownloaded
+    if let episode = try? LocalEpisode.fetch(episodeID: id), episode.isDownloaded {
+      return .downloaded
+    }
+    if let request = try? DownloadRequest.fetch(itemID: id), !request.hasFailed {
+      return .downloading(progress: 0)
     }
     return .notDownloaded
   }
@@ -357,6 +370,7 @@ final class DownloadManager: NSObject, ObservableObject {
       let request = try? DownloadRequest.fetch(itemID: itemID),
       isRequestSatisfied(itemID: itemID, kind: request.kind)
     else { return }
+    stampDownloadDate(for: itemID)
     try? request.delete()
   }
 
@@ -448,6 +462,12 @@ final class DownloadManager: NSObject, ObservableObject {
       return
     }
 
+    if kind != .ebook, !hasEnoughSpace(for: size) {
+      AppLogger.download.error("Not enough storage for book: \(itemID)")
+      Toast(error: "Not enough storage on device").show()
+      return
+    }
+
     AppLogger.download.info("Queueing \(kind.rawValue) download for book: \(itemID)")
 
     try? DownloadRequest(
@@ -464,6 +484,8 @@ final class DownloadManager: NSObject, ObservableObject {
       request.failureCount = 0
       try? request.save()
     }
+
+    downloadStates[itemID] = .downloading(progress: 0)
 
     startNextIfIdle()
   }
@@ -544,6 +566,14 @@ final class DownloadManager: NSObject, ObservableObject {
       return false
     }
 
+    guard hasEnoughSpace(for: plan.totalBytes - bytesCompleted) else {
+      AppLogger.download.error("Not enough storage for book: \(itemID)")
+      Toast(error: "Not enough storage on device").show()
+      request?.failureCount = DownloadRequest.maxFailures
+      try? request?.save()
+      throw CancellationError()
+    }
+
     let isStreaming =
       PlayerManager.shared.current?.isPlaying == true
       && PlayerManager.shared.current?.downloadState == .notDownloaded
@@ -554,7 +584,7 @@ final class DownloadManager: NSObject, ObservableObject {
       kind: kind,
       podcastID: podcastID,
       priority: priority,
-      files: Dictionary(uniqueKeysWithValues: pending.map { ($0.relativePath, $0) }),
+      files: Dictionary(pending.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first }),
       bytesCompleted: bytesCompleted,
       totalBytes: plan.totalBytes
     )
@@ -636,7 +666,12 @@ final class DownloadManager: NSObject, ObservableObject {
     let wasCancelled = (error as? URLError)?.code == .cancelled || error is CancellationError
     file.attempt += 1
 
-    guard retryable, !wasCancelled, file.attempt < Self.maxRetryAttempts else {
+    guard
+      retryable,
+      !wasCancelled,
+      file.attempt < Self.maxRetryAttempts,
+      hasEnoughSpace(for: download.totalBytes - download.bytesCompleted)
+    else {
       fail(itemID: download.itemID, error: error)
       return
     }
@@ -663,6 +698,8 @@ final class DownloadManager: NSObject, ObservableObject {
     let currentKind = request?.kind ?? kind
 
     if isRequestSatisfied(itemID: itemID, kind: currentKind) {
+      stampDownloadDate(for: itemID)
+      storeCover(itemID: itemID, fallbackURL: request?.coverURL)
       deleteRequest(for: itemID)
       Toast(success: "Download completed").show()
       AppLogger.download.info("Download completed for book: \(itemID)")
@@ -689,6 +726,114 @@ final class DownloadManager: NSObject, ObservableObject {
       WatchConnectivityManager.shared.syncPhoneDownloadedBooks()
     }
     startNextIfIdle()
+  }
+
+  private func stampDownloadDate(for itemID: String) {
+    if let book = try? LocalBook.fetch(bookID: itemID) {
+      book.downloadedAt = Date()
+      try? book.save()
+    } else if let episode = try? LocalEpisode.fetch(episodeID: itemID) {
+      episode.downloadedAt = Date()
+      try? episode.save()
+    }
+  }
+
+  private func storeCover(itemID: String, fallbackURL: URL?) {
+    let remoteURL =
+      (try? LocalBook.fetch(bookID: itemID))?.coverURL(raw: true)
+      ?? (try? LocalEpisode.fetch(episodeID: itemID))?.coverURL(raw: true)
+      ?? fallbackURL
+
+    guard let remoteURL, !remoteURL.isFileURL else { return }
+    guard let serverID = Audiobookshelf.shared.authentication.server?.id else { return }
+
+    let relativePath = Self.coverPath(serverID: serverID, itemID: itemID)
+
+    Task {
+      guard let (data, _) = try? await ImagePipeline.shared.data(for: ImageRequest(url: remoteURL)) else {
+        AppLogger.download.error("Failed to fetch cover for item: \(itemID)")
+        return
+      }
+
+      let destination = Self.appGroupContainer.appendingPathComponent(relativePath)
+      var directory = destination.deletingLastPathComponent()
+
+      do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? directory.setResourceValues(values)
+
+        try data.write(to: destination, options: .atomic)
+      } catch {
+        AppLogger.download.error("Failed to store cover for item \(itemID): \(error.localizedDescription)")
+        return
+      }
+
+      guard let coverFile = URL(string: relativePath) else { return }
+
+      if let book = try? LocalBook.fetch(bookID: itemID) {
+        book.coverFile = coverFile
+        try? book.save()
+      } else if let episode = try? LocalEpisode.fetch(episodeID: itemID) {
+        episode.coverFile = coverFile
+        try? episode.save()
+      }
+    }
+  }
+
+  private func removeCover(itemID: String) {
+    guard let serverID = Audiobookshelf.shared.authentication.server?.id else { return }
+
+    try? FileManager.default.removeItem(at: Self.coverFile(serverID: serverID, itemID: itemID))
+  }
+
+  func backfillMissingCovers() {
+    guard Audiobookshelf.shared.libraries.current != nil else { return }
+    guard NetworkMonitor.shared.isConnected else { return }
+
+    let books = ((try? LocalBook.fetchAll()) ?? [])
+      .filter { $0.coverFile == nil && ($0.isDownloaded || $0.mediaType.contains(.ebook)) }
+    let episodes = ((try? LocalEpisode.fetchAll()) ?? [])
+      .filter { $0.coverFile == nil && $0.isDownloaded }
+
+    for book in books {
+      storeCover(itemID: book.bookID, fallbackURL: nil)
+    }
+
+    for episode in episodes {
+      storeCover(itemID: episode.episodeID, fallbackURL: nil)
+    }
+  }
+
+  func backfillDownloadDates() {
+    guard ModelContextProvider.shared.activeServerID != nil else { return }
+
+    let books = ((try? LocalBook.fetchAll()) ?? [])
+      .filter { $0.downloadedAt == nil && ($0.isDownloaded || $0.mediaType.contains(.ebook)) }
+    let episodes = ((try? LocalEpisode.fetchAll()) ?? [])
+      .filter { $0.downloadedAt == nil && $0.isDownloaded }
+
+    for book in books {
+      guard
+        let fileURL = book.orderedTracks.first?.localPath ?? book.ebookLocalPath,
+        let date = try? fileURL.resourceValues(forKeys: [.creationDateKey]).creationDate
+      else { continue }
+
+      book.downloadedAt = date
+    }
+
+    for episode in episodes {
+      guard
+        let fileURL = episode.track?.localPath,
+        let date = try? fileURL.resourceValues(forKeys: [.creationDateKey]).creationDate
+      else { continue }
+
+      episode.downloadedAt = date
+    }
+
+    try? ModelContextProvider.shared.context.save()
   }
 
   private func fail(itemID: String, error: Error) {
@@ -1036,6 +1181,8 @@ extension DownloadManager {
       ]
     )
 
+    removeCover(itemID: bookID)
+
     if let book = try? LocalBook.fetch(bookID: bookID) {
       if PlayerManager.shared.current?.id == bookID {
         clearDownloadedPaths(of: book)
@@ -1059,8 +1206,16 @@ extension DownloadManager {
     deleteRequest(for: bookID)
     try? FileManager.default.removeItem(at: Self.ebookDirectory(serverID: serverID, bookID: bookID))
 
+    let audiobookDirectory = Self.audiobookDirectory(serverID: serverID, bookID: bookID)
+    if !FileManager.default.fileExists(atPath: audiobookDirectory.path) {
+      removeCover(itemID: bookID)
+    }
+
     if let book = try? LocalBook.fetch(bookID: bookID) {
       book.ebookFile = nil
+      if book.localCoverURL == nil {
+        book.coverFile = nil
+      }
       try? book.save()
     }
 
@@ -1079,9 +1234,12 @@ extension DownloadManager {
       directories: [Self.episodeDirectory(serverID: serverID, podcastID: podcastID, episodeID: episodeID)]
     )
 
+    removeCover(itemID: episodeID)
+
     if let episode = try? LocalEpisode.fetch(episodeID: episodeID) {
       if PlayerManager.shared.current?.id == episodeID {
         episode.track?.relativePath = nil
+        episode.coverFile = nil
         try? episode.save()
       } else {
         try? episode.delete()
@@ -1096,6 +1254,7 @@ extension DownloadManager {
       track.relativePath = nil
     }
     book.ebookFile = nil
+    book.coverFile = nil
     try? book.save()
   }
 
@@ -1203,6 +1362,14 @@ extension DownloadManager {
     var values = URLResourceValues()
     values.isExcludedFromBackup = true
     try? parent.setResourceValues(values)
+  }
+
+  private func hasEnoughSpace(for bytes: Int64) -> Bool {
+    let values = try? Self.appGroupContainer.resourceValues(
+      forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+    )
+    guard let available = values?.volumeAvailableCapacityForImportantUsage else { return true }
+    return bytes <= available
   }
 
   func diskSize(of url: URL) -> Int64 {

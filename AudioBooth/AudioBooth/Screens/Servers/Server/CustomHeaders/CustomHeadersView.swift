@@ -37,7 +37,7 @@ struct CustomHeadersView: View {
       .listRowBackground(theme.colors.background.card)
     }
     .scrollContentBackground(.hidden)
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle("Custom Headers")
     .navigationBarTitleDisplayMode(.inline)
     .sheet(isPresented: $model.showAddSheet) {
@@ -78,7 +78,7 @@ struct AddHeaderView: View {
         .listRowBackground(theme.colors.background.card)
       }
       .scrollContentBackground(.hidden)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
       .navigationTitle("Add Header")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -115,6 +115,10 @@ extension CustomHeadersView {
     var showAddSheet: Bool
     var newHeaderKey: String
     var newHeaderValue: String
+
+    var dictionary: [String: String] {
+      Dictionary(headers.map { ($0.key, $0.value) }, uniquingKeysWith: { _, last in last })
+    }
 
     func onAddHeaderTapped() {}
     func onSaveHeader() {}

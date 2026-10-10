@@ -8,7 +8,6 @@ import SwiftUI
 
 struct BookDetailsView: View {
   @Environment(\.appTheme) var theme
-  @Environment(\.verticalSizeClass) private var verticalSizeClass
 
   @StateObject var model: Model
 
@@ -22,14 +21,14 @@ struct BookDetailsView: View {
   }
 
   var body: some View {
-    Group {
-      if verticalSizeClass == .compact {
-        landscapeLayout
+    GeometryReader { proxy in
+      if proxy.size.width > proxy.size.height {
+        landscapeLayout(coverWidth: proxy.leadingPanelWidth ?? 300)
       } else {
         portraitLayout
       }
     }
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .fullScreenCover(item: $model.ebookReader) { model in
       NavigationStack {
         EbookReaderView(model: model)
@@ -44,7 +43,7 @@ struct BookDetailsView: View {
       if model.isLoading {
         ProgressView("Loading book details...")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(theme.colors.background.page)
+          .background(theme.colors.background.page.ignoresSafeArea())
       } else if let error = model.error {
         ContentUnavailableView {
           Label("Unable to Load Book", systemImage: "exclamationmark.triangle")
@@ -56,7 +55,7 @@ struct BookDetailsView: View {
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.colors.background.page)
+        .background(theme.colors.background.page.ignoresSafeArea())
       }
     }
     .toolbar {
@@ -110,6 +109,12 @@ struct BookDetailsView: View {
               case .notDownloaded:
                 Label("Download", systemImage: "arrow.down.circle")
               }
+            }
+          }
+
+          if model.actions.contains(.downloadToWatch) {
+            Button(action: model.onDownloadToWatchTapped) {
+              Label("Download to Apple Watch", systemImage: "applewatch")
             }
           }
 
@@ -179,7 +184,7 @@ struct BookDetailsView: View {
 
           contentSections
             .padding()
-            .background(theme.colors.background.page)
+            .background(theme.colors.background.page.ignoresSafeArea())
         }
         .padding(.vertical)
       }
@@ -188,16 +193,15 @@ struct BookDetailsView: View {
     }
   }
 
-  private var landscapeLayout: some View {
+  private func landscapeLayout(coverWidth: CGFloat) -> some View {
     HStack(spacing: 0) {
-      simpleCover
-        .frame(width: 300)
+      simpleCover(width: coverWidth)
 
       ScrollView {
         contentSections
           .padding()
       }
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
     }
   }
 
@@ -341,7 +345,7 @@ struct BookDetailsView: View {
     }
   }
 
-  private var simpleCover: some View {
+  private func simpleCover(width: CGFloat) -> some View {
     VStack {
       Cover(
         model: Cover.Model(
@@ -353,7 +357,8 @@ struct BookDetailsView: View {
         ),
         style: .plain
       )
-      .frame(width: 200, height: 200)
+      .aspectRatio(1, contentMode: .fit)
+      .frame(maxWidth: width * 2 / 3, maxHeight: width * 2 / 3)
       .shadow(radius: 4)
       .padding()
       .onTapGesture {
@@ -361,6 +366,7 @@ struct BookDetailsView: View {
         isShowingFullScreenCover = true
       }
     }
+    .frame(width: width)
     .frame(maxHeight: .infinity)
     .background {
       LazyImage(url: model.coverURL) { state in
@@ -653,6 +659,7 @@ extension BookDetailsView {
       static let resetProgress = Actions(rawValue: 1 << 5)
       static let writeNFCTag = Actions(rawValue: 1 << 6)
       static let sendToEbook = Actions(rawValue: 1 << 8)
+      static let downloadToWatch = Actions(rawValue: 1 << 9)
     }
 
     let bookID: String
@@ -668,7 +675,7 @@ extension BookDetailsView {
     var isLoading: Bool
     var isPlaying: Bool
     var shareItems: [BookShareItem] = []
-    var shareCoverImage: Image? = nil
+    var shareCoverImage: Image? { nil }
     var flags: Flags
     var error: String?
     var genres: [String]?
@@ -693,6 +700,7 @@ extension BookDetailsView {
     func onSendToEbookTapped(_ device: String) {}
     func onAddToQueueTapped() {}
     func onRemoveFromQueueTapped() {}
+    func onDownloadToWatchTapped() {}
 
     init(
       bookID: String,

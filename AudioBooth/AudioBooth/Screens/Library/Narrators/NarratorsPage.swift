@@ -31,8 +31,7 @@ struct NarratorsPage: View {
         }
       }
     }
-    .background(theme.colors.background.page)
-    .navigationTitle("Narrators")
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationBarTitleDisplayMode(.inline)
     .refreshable {
       await model.refresh()
@@ -131,7 +130,7 @@ struct NarratorsPage: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal)
       .padding(.vertical, 8)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
   }
 }
 

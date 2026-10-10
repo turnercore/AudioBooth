@@ -1,11 +1,13 @@
 import API
 import AVFoundation
 import BackgroundTasks
+import Combine
 import Foundation
 import Logging
 import MediaPlayer
 import Models
 import PlayerIntents
+import UIKit
 
 #if !targetEnvironment(macCatalyst)
 import ActivityKit
@@ -24,9 +26,24 @@ final class SessionManager {
   private var currentHasHLS = false
   private var lastSyncAt = Date()
   private var inactivityTask: Task<Void, Never>?
+  private var unsyncedSyncTask: Task<Void, Never>?
+  private var lastUnsyncedSyncAt = Date.distantPast
+  private var unsyncedSyncDelay: TimeInterval = 0
+  private var cancellables = Set<AnyCancellable>()
 
   private init() {
     registerBackgroundTask()
+
+    NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+      .sink { [weak self] _ in
+        guard let player = PlayerManager.shared.current else { return }
+        if let podcastID = player.podcastID {
+          self?.refreshProgress(itemID: podcastID, episodeID: player.id)
+        } else {
+          self?.refreshProgress(itemID: player.id)
+        }
+      }
+      .store(in: &cancellables)
   }
 
   func clearSession() {
@@ -107,6 +124,7 @@ extension SessionManager {
         mediaProgress: mediaProgress
       )
       AppLogger.session.info("Created local session for offline stats tracking")
+      refreshProgress(itemID: itemID, episodeID: episodeID)
       return item
     }
 
@@ -170,8 +188,11 @@ extension SessionManager {
     let updatedItem: any PlayableItem
 
     if let item {
-      if let localBook = item as? LocalBook {
-        localBook.chapters = audiobookshelfSession.chapters?.map(Chapter.init) ?? []
+      if let localBook = item as? LocalBook,
+        let sessionChapters = audiobookshelfSession.chapters, !sessionChapters.isEmpty
+      {
+        localBook.chapters = sessionChapters.map(Chapter.init)
+        try? localBook.save()
       }
       updatedItem = item
       AppLogger.session.debug("Updated session with chapters")
@@ -213,7 +234,7 @@ extension SessionManager {
       case .book(let book):
         let newItem = LocalBook(from: book)
         try? newItem.save()
-        updatedItem = newItem
+        updatedItem = (try? LocalBook.fetch(bookID: newItem.bookID)) ?? newItem
       case .podcast:
         throw SessionError.failedToCreateSession
       }
@@ -254,6 +275,20 @@ extension SessionManager {
   private static func sessionURL(for sessionID: String, serverURL: URL) -> URL? {
     let baseURL = serverURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     return URL(string: "\(baseURL)/public/session/\(sessionID)")
+  }
+
+  private func refreshProgress(itemID: String, episodeID: String? = nil) {
+    Task {
+      do {
+        let progressID = episodeID.map { "\(itemID)/\($0)" } ?? itemID
+        let apiProgress = try await audiobookshelf.progress.fetch(bookID: progressID)
+        guard let mediaProgress = try MediaProgress.fetch(bookID: episodeID ?? itemID) else { return }
+        mediaProgress.update(from: apiProgress)
+        try mediaProgress.save()
+      } catch {
+        AppLogger.session.debug("Failed to refresh progress: \(error)")
+      }
+    }
   }
 
   private func startLocalSession(
@@ -456,7 +491,17 @@ extension SessionManager {
   }
 
   func syncUnsyncedSessions() {
-    AppLogger.session.info("Starting bulk sync of unsynced sessions")
+    guard unsyncedSyncTask == nil else {
+      AppLogger.session.debug("Unsynced session sync already in progress")
+      return
+    }
+
+    if Date.now.timeIntervalSince(lastUnsyncedSyncAt) < unsyncedSyncDelay {
+      AppLogger.session.debug(
+        "Skipping unsynced session sync, next attempt allowed after \(self.unsyncedSyncDelay)s"
+      )
+      return
+    }
 
     let unsyncedSessions: [PlaybackSession]
     do {
@@ -471,30 +516,41 @@ extension SessionManager {
       return
     }
 
-    AppLogger.session.info(
-      "Found \(unsyncedSessions.count) unsynced sessions to sync"
-    )
+    AppLogger.session.info("Syncing \(unsyncedSessions.count) unsynced sessions")
 
-    let sessionSyncs = unsyncedSessions.map { SessionSync($0) }
+    lastUnsyncedSyncAt = .now
+    unsyncedSyncTask = Task {
+      defer { unsyncedSyncTask = nil }
 
-    Task {
-      do {
-        try await audiobookshelf.sessions.syncLocalSessions(sessionSyncs)
-
-        for session in unsyncedSessions {
+      var syncedCount = 0
+      for session in unsyncedSessions {
+        do {
+          try await audiobookshelf.sessions.syncLocalSession(SessionSync(session))
           session.timeListening += session.pendingListeningTime
           session.pendingListeningTime = 0
           try session.save()
-        }
+          syncedCount += 1
+        } catch {
+          if let networkError = error as? NetworkError,
+            case .httpError(let statusCode, _) = networkError,
+            !([401, 408, 429].contains(statusCode) || statusCode >= 500)
+          {
+            AppLogger.session.warning(
+              "Server rejected session \(session.id) with HTTP \(statusCode), skipping it"
+            )
+            continue
+          }
 
-        AppLogger.session.info(
-          "Successfully synced \(unsyncedSessions.count) sessions"
-        )
-      } catch {
-        AppLogger.session.error(
-          "Failed to bulk sync sessions: \(error). Will retry on next startup."
-        )
+          unsyncedSyncDelay = max(60, min(unsyncedSyncDelay * 2, 16 * 60))
+          AppLogger.session.error(
+            "Failed to sync session \(session.id) after \(syncedCount) synced: \(error). Next attempt in \(self.unsyncedSyncDelay)s."
+          )
+          return
+        }
       }
+
+      unsyncedSyncDelay = 30
+      AppLogger.session.info("Successfully synced \(syncedCount) sessions")
     }
   }
 }
@@ -587,8 +643,8 @@ extension SessionManager {
       task.setTaskCompleted(success: false)
     } else {
       AppLogger.session.info("Playback is not active, attempting to close session")
-      endAllSleepTimerLiveActivities()
       Task {
+        await endAllSleepTimerLiveActivities()
         do {
           try await closeSession()
           task.setTaskCompleted(success: true)
@@ -675,16 +731,14 @@ extension SessionManager {
 
 extension SessionManager {
   #if !targetEnvironment(macCatalyst)
-  private func endAllSleepTimerLiveActivities() {
-    Task {
-      for activity in Activity<SleepTimerActivityAttributes>.activities {
-        await activity.end(nil, dismissalPolicy: .immediate)
-      }
-      AppLogger.session.info("Ended all sleep timer Live Activities during session cleanup")
+  private func endAllSleepTimerLiveActivities() async {
+    for activity in Activity<SleepTimerActivityAttributes>.activities {
+      await activity.end(nil, dismissalPolicy: .immediate)
     }
+    AppLogger.session.info("Ended all sleep timer Live Activities during session cleanup")
   }
   #else
-  private func endAllSleepTimerLiveActivities() {}
+  private func endAllSleepTimerLiveActivities() async {}
   #endif
 }
 

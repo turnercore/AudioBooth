@@ -9,7 +9,6 @@ struct EbookReaderView: View {
 
   @State private var showControls = false
   @State private var showSettings = false
-  @State private var showPlayerSheet = false
   @State private var showZoneEditor = false
 
   @State var preferredColorScheme: ColorScheme?
@@ -18,6 +17,41 @@ struct EbookReaderView: View {
   private let userPreferences = UserPreferences.shared
 
   var body: some View {
+    contentWithSheets
+      .onChange(of: showZoneEditor) { _, isShowing in
+        if isShowing { showControls = false }
+      }
+      .onChange(of: showControls) { _, value in
+        model.onShowControlsChanged(value)
+      }
+      .onChange(of: colorScheme) { _, _ in
+        if model.preferences.theme == .auto {
+          model.onPreferencesChanged(model.preferences)
+        }
+        preferredColorScheme = model.preferences.theme.colorScheme
+      }
+      .onAppear {
+        UIApplication.shared.isIdleTimerDisabled = userPreferences.keepScreenAwakeInPlayer
+        model.onAppear()
+      }
+      .onDisappear {
+        UIApplication.shared.isIdleTimerDisabled = false
+        model.onDisappear()
+      }
+      .statusBarHidden(true)
+      .preferredColorScheme(preferredColorScheme)
+      .background {
+        if volumeButtonsEnabled {
+          VolumeButtonObserver(
+            onVolumeUp: { model.onTapRight() },
+            onVolumeDown: { model.onTapLeft() }
+          )
+          .allowsHitTesting(false)
+        }
+      }
+  }
+
+  private var content: some View {
     ZStack {
       if model.isLoading {
         loadingView
@@ -29,99 +63,120 @@ struct EbookReaderView: View {
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(.hidden, for: .navigationBar)
-    .toolbar {
-      ToolbarItem(placement: .topBarLeading) {
-        if showControls, !model.isLoading, model.error == nil, model.supportsSearch {
-          Button {
-            model.onSearchTapped()
-          } label: {
-            Label("Search", systemImage: "magnifyingglass")
-          }
-          .transition(.opacity)
-          .tint(.primary)
-        }
-      }
+    .toolbar { toolbarContent }
+  }
 
-      ToolbarItem(placement: .topBarTrailing) {
-        if showControls || model.isLoading {
-          Button {
-            dismiss()
-          } label: {
-            Label("Close", systemImage: "xmark")
-          }
-          .transition(.opacity)
-          .tint(.primary)
-        }
-      }
-
-      ToolbarItem(placement: .bottomBar) {
-        if !model.isLoading, model.error == nil, showControls {
-          bottomControlBar
-            .tint(.primary)
-        }
-      }
-    }
-    .sheet(isPresented: $showSettings) {
-      EbookReaderPreferencesView(preferences: model.preferences) {
-        showSettings = false
-        Task {
-          try? await Task.sleep(for: .milliseconds(400))
-          showZoneEditor = true
-        }
-      }
-    }
-    .overlay {
-      if showZoneEditor {
-        EbookTapZonesEditorView(preferences: model.preferences) {
-          showZoneEditor = false
+  @ToolbarContentBuilder
+  private var toolbarContent: some ToolbarContent {
+    ToolbarItem(placement: .topBarLeading) {
+      if showControls, !model.isLoading, model.error == nil, model.supportsSearch {
+        Button {
+          model.onSearchTapped()
+        } label: {
+          Label("Search", systemImage: "magnifyingglass")
         }
         .transition(.opacity)
+        .tint(.primary)
       }
     }
-    .animation(.easeInOut(duration: 0.2), value: showZoneEditor)
-    .onChange(of: showZoneEditor) { _, isShowing in
-      if isShowing { showControls = false }
-    }
-    .onChange(of: showControls) { _, value in
-      model.onShowControlsChanged(value)
-    }
-    .onChange(of: colorScheme) { _, _ in
-      if model.preferences.theme == .auto {
-        model.onPreferencesChanged(model.preferences)
-      }
-      preferredColorScheme = model.preferences.theme.colorScheme
-    }
-    .sheet(
-      isPresented: Binding(
-        get: { model.chapters?.isPresented ?? false },
-        set: { if let chapters = model.chapters { chapters.isPresented = $0 } }
-      )
-    ) {
-      if let chapters = model.chapters {
-        EbookChapterPickerSheet(model: chapters)
+
+    ToolbarItem(placement: .topBarTrailing) {
+      if showControls || model.isLoading {
+        Button {
+          dismiss()
+        } label: {
+          Label("Close", systemImage: "xmark")
+        }
+        .transition(.opacity)
+        .tint(.primary)
       }
     }
-    .sheet(item: $model.search) { searchModel in
-      EbookSearchView(model: searchModel)
-    }
-    .adaptiveSheet(isPresented: $showPlayerSheet) {
-      if let player = playerManager.current {
-        EbookPlayerSheet(player: player)
+
+    ToolbarItem(placement: .bottomBar) {
+      if !model.isLoading, model.error == nil, showControls {
+        bottomControlBar
+          .tint(.primary)
       }
     }
-    .onAppear(perform: model.onAppear)
-    .onDisappear(perform: model.onDisappear)
-    .statusBarHidden(!showControls)
-    .preferredColorScheme(preferredColorScheme)
-    .background {
-      if volumeButtonsEnabled {
-        VolumeButtonObserver(
-          onVolumeUp: { model.onTapRight() },
-          onVolumeDown: { model.onTapLeft() }
+  }
+
+  private var contentWithOverlays: some View {
+    content
+      .overlay(alignment: .top) {
+        if let readAlong = model.readAlong, let message = readAlongStatusMessage(readAlong.status) {
+          ReadAlongStatusPill(message: message, status: readAlong.status)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        } else if let message = model.catchUpMessage {
+          PositionSyncBanner(
+            message: message,
+            onCatchUp: model.onCatchUpTapped,
+            onDismiss: model.onCatchUpDismissed
+          )
+          .padding(.top, 8)
+          .transition(.move(edge: .top).combined(with: .opacity))
+        }
+      }
+      .animation(.easeInOut(duration: 0.25), value: model.catchUpMessage)
+      .animation(.easeInOut(duration: 0.25), value: model.readAlong?.status)
+      .overlay {
+        if showZoneEditor {
+          EbookTapZonesEditorView(preferences: model.preferences) {
+            showZoneEditor = false
+          }
+          .transition(.opacity)
+        }
+      }
+      .animation(.easeInOut(duration: 0.2), value: showZoneEditor)
+  }
+
+  private var contentWithSheets: some View {
+    contentWithOverlays
+      .sheet(isPresented: $showSettings) {
+        EbookReaderPreferencesView(preferences: model.preferences) {
+          showSettings = false
+          Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            showZoneEditor = true
+          }
+        }
+      }
+      .sheet(isPresented: isChaptersPresented) {
+        if let chapters = model.chapters {
+          EbookChapterPickerSheet(model: chapters)
+        }
+      }
+      .sheet(item: $model.search) { searchModel in
+        EbookSearchView(model: searchModel)
+      }
+      .sheet(item: $model.positionSync) { positionSync in
+        PositionSyncSheet(model: positionSync)
+      }
+      .adaptiveSheet(
+        isPresented: Binding(
+          get: { model.playerSheet?.isPresented ?? false },
+          set: { newValue in model.playerSheet?.isPresented = newValue }
         )
-        .allowsHitTesting(false)
+      ) {
+        if let playerSheet = model.playerSheet {
+          EbookPlayerSheet(model: playerSheet)
+        }
       }
-    }
+      .sheet(
+        item: Binding(
+          get: { model.playerSheet?.player.positionSync },
+          set: { newValue in model.playerSheet?.player.positionSync = newValue }
+        )
+      ) { positionSync in
+        PositionSyncSheet(model: positionSync)
+      }
+  }
+
+  private var isChaptersPresented: Binding<Bool> {
+    Binding(
+      get: { model.chapters?.isPresented ?? false },
+      set: { if let chapters = model.chapters { chapters.isPresented = $0 } }
+    )
   }
 
   private var volumeButtonsEnabled: Bool {
@@ -230,10 +285,56 @@ struct EbookReaderView: View {
   }
 
   private var progressLabel: String {
-    if model.preferences.progressDisplay == .page, let page = model.page {
-      return String(localized: "\(page.current) of \(page.total)")
+    if let page = displayedPage {
+      return page.current.formatted()
     }
     return model.progress.formatted(.percent.precision(.fractionLength(0)))
+  }
+
+  private var progressCaption: String {
+    if let page = displayedPage {
+      return String(localized: "of \(page.total)")
+    }
+    return String(localized: "Progress")
+  }
+
+  private var displayedPage: (current: Int, total: Int)? {
+    model.preferences.progressDisplay == .page ? model.page : nil
+  }
+
+  @ViewBuilder
+  private var readAlongIcon: some View {
+    switch model.readAlong?.status {
+    case .preparing:
+      ProgressView()
+        .controlSize(.small)
+    case .locating:
+      Image(systemName: "waveform.badge.magnifyingglass")
+    case .following:
+      Image(systemName: "waveform")
+        .symbolEffect(.variableColor.iterative, options: .repeating)
+    case .failed:
+      Image(systemName: "waveform.badge.exclamationmark")
+    case .off, .none:
+      Image(systemName: "waveform")
+    }
+  }
+
+  private func readAlongStatusMessage(_ status: ReadAlongCoordinator.Status) -> String? {
+    switch status {
+    case let .preparing(fraction):
+      model.isCatchingUpToNarration
+        ? String(localized: "Getting ready… \(Int(fraction * 100))%")
+        : String(localized: "Preparing Read Along… \(Int(fraction * 100))%")
+    case .locating:
+      model.isCatchingUpToNarration
+        ? String(localized: "Finding where the narrator is…")
+        : String(localized: "Listening for your place in the book…")
+    case let .failed(message):
+      message
+    case .off, .following:
+      nil
+    }
   }
 
   @ViewBuilder
@@ -244,6 +345,7 @@ struct EbookReaderView: View {
           VStack(spacing: 6) {
             Image(systemName: "list.bullet")
               .font(.system(size: 20))
+              .frame(height: 20)
             Text("Contents")
               .font(.caption2)
           }
@@ -259,6 +361,7 @@ struct EbookReaderView: View {
           VStack(spacing: 6) {
             Image(systemName: "textformat.size")
               .font(.system(size: 20))
+              .frame(height: 20)
             Text("Settings")
               .font(.caption2)
           }
@@ -271,17 +374,34 @@ struct EbookReaderView: View {
           Text(progressLabel)
             .font(.system(size: 16, weight: .medium))
             .monospacedDigit()
-          Text("Progress")
+            .lineLimit(1)
+            .frame(width: 60, height: 20)
+          Text(progressCaption)
             .font(.caption2)
         }
       }
       .frame(maxWidth: .infinity)
 
+      if model.supportsReadAlong {
+        Button(action: { model.onReadAlongTapped() }) {
+          VStack(spacing: 6) {
+            readAlongIcon
+              .font(.system(size: 20))
+              .frame(height: 20)
+            Text("Read Along")
+              .font(.caption2)
+          }
+        }
+        .frame(maxWidth: .infinity)
+        .tint(model.readAlong?.status.isActive == true ? .accentColor : .primary)
+      }
+
       if playerManager.current != nil {
-        Button(action: { showPlayerSheet = true }) {
+        Button(action: model.onNowPlayingTapped) {
           VStack(spacing: 6) {
             Image(systemName: "playpause.circle")
               .font(.system(size: 20))
+              .frame(height: 20)
             Text("Now Playing")
               .font(.caption2)
           }
@@ -356,6 +476,13 @@ extension EbookReaderView {
     var search: EbookSearchView.Model?
     var supportsSearch: Bool
 
+    var supportsReadAlong: Bool
+    var readAlong: ReadAlongCoordinator?
+    var catchUpMessage: LocalizedStringResource?
+    var isCatchingUpToNarration: Bool = false
+    var positionSync: PositionSyncSheet.Model?
+    var playerSheet: EbookPlayerSheet.Model?
+
     func onAppear() {}
     func onDisappear() {}
     func onTableOfContentsTapped() {}
@@ -367,6 +494,10 @@ extension EbookReaderView {
     func onTapRight() {}
     func onAutoScrollPlayPauseTapped() {}
     func onShowControlsChanged(_ isVisible: Bool) {}
+    func onReadAlongTapped() {}
+    func onCatchUpTapped() {}
+    func onCatchUpDismissed(_ scope: PositionSyncOffer.Dismissal) {}
+    func onNowPlayingTapped() {}
 
     init(
       isLoading: Bool = true,
@@ -378,7 +509,8 @@ extension EbookReaderView {
       preferences: EbookReaderPreferences = EbookReaderPreferences(),
       supportsSettings: Bool = false,
       search: EbookSearchView.Model? = nil,
-      supportsSearch: Bool = false
+      supportsSearch: Bool = false,
+      supportsReadAlong: Bool = false
     ) {
       self.isLoading = isLoading
       self.error = error
@@ -390,6 +522,7 @@ extension EbookReaderView {
       self.supportsSettings = supportsSettings
       self.search = search
       self.supportsSearch = supportsSearch
+      self.supportsReadAlong = supportsReadAlong
     }
   }
 }

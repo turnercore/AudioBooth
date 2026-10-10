@@ -40,13 +40,20 @@ final class AudioPlayer {
   private var requiresQueueReload = false
   private var cancellables = Set<AnyCancellable>()
   private var itemObservers = Set<AnyCancellable>()
+  private var wantsPlayback = false
+  private var decodeRetryCount = 0
+  private var decodeRetryTime: TimeInterval?
+  private var pendingSeekTarget: TimeInterval?
+  private var resumeTask: Task<Void, Never>?
 
   let events = PassthroughSubject<Event, Never>()
 
   var time: TimeInterval {
-    guard !tracks.isEmpty else { return player.currentSeconds }
+    let seconds = player.currentSeconds
+    guard seconds >= 0 else { return mediaProgress.currentTime }
+    guard !tracks.isEmpty else { return seconds }
     let track = tracks[currentTrackIndex]
-    return track.startOffset + min(player.currentSeconds, track.duration)
+    return track.startOffset + min(seconds, track.duration)
   }
 
   var isPlaying: Bool {
@@ -87,6 +94,9 @@ final class AudioPlayer {
 
   func setQueue(for session: PlaybackSession) {
     let wasPlaying = isPlaying
+    wantsPlayback = wasPlaying
+    pendingSeekTarget = nil
+    resetDecodeRetry()
     self.session = session
     self.tracks = session.tracks.filter { url(for: $0) != nil }
 
@@ -94,6 +104,8 @@ final class AudioPlayer {
       player.removeAllItems()
       return
     }
+
+    AppLogger.player.info("Playing from \(self.isUsingRemoteURLs ? "remote" : "local") files")
 
     addTimeObserver()
 
@@ -104,6 +116,8 @@ final class AudioPlayer {
 
   func pause() {
     playbackRequested = false
+    wantsPlayback = false
+    resumeTask?.cancel()
     player.pause()
   }
 
@@ -114,32 +128,54 @@ final class AudioPlayer {
       return
     }
 
-    if isPlaying {
-      events.send(.stateChanged(.playing))
-      return
-    }
+    wantsPlayback = true
 
-    if player.currentItem == nil || player.currentItem?.status == .failed || requiresQueueReload {
-      let (trackIndex, offset) = trackAndOffset(for: mediaProgress.currentTime)
-      currentTrackIndex = trackIndex
-      loadQueue(from: trackIndex, seekTo: offset, autoPlay: true)
-    } else {
-      seek(to: mediaProgress.currentTime)
-      player.play()
+    AudioSession.configure()
+
+    resumeTask?.cancel()
+    resumeTask = Task {
+      let activated = await AudioSession.activate()
+
+      guard !Task.isCancelled, wantsPlayback else {
+        events.send(.stateChanged(isPlaying ? .playing : .paused))
+        return
+      }
+
+      if player.currentItem == nil || player.currentItem?.status == .failed || requiresQueueReload {
+        let (trackIndex, offset) = trackAndOffset(for: mediaProgress.currentTime)
+        currentTrackIndex = trackIndex
+        loadQueue(from: trackIndex, seekTo: offset, autoPlay: true)
+      } else if isPlaying {
+        events.send(.stateChanged(.playing))
+      } else {
+        if pendingSeekTarget != mediaProgress.currentTime {
+          seek(to: mediaProgress.currentTime)
+        }
+        player.play()
+
+        if !activated {
+          events.send(.stateChanged(isPlaying ? .playing : .paused))
+        }
+      }
     }
   }
 
   func stop() {
+    wantsPlayback = false
+    resumeTask?.cancel()
+    pendingSeekTarget = nil
     removeTimeObserver()
     playbackRequested = false
     requiresQueueReload = false
     player.pause()
     player.removeAllItems()
+    AudioSession.deactivate()
     events.send(.stateChanged(.stopped))
   }
 
   func seek(to time: TimeInterval) {
     mediaProgress.currentTime = time
+    pendingSeekTarget = time
 
     guard !tracks.isEmpty else {
       player.seek(
@@ -147,6 +183,7 @@ final class AudioPlayer {
         toleranceBefore: .zero,
         toleranceAfter: .zero
       ) { [weak self] _ in
+        self?.pendingSeekTarget = nil
         self?.events.send(.seek(time))
       }
       return
@@ -160,14 +197,19 @@ final class AudioPlayer {
         toleranceBefore: .zero,
         toleranceAfter: .zero
       ) { [weak self] _ in
+        self?.pendingSeekTarget = nil
         self?.events.send(.seek(time))
       }
       return
     }
 
-    guard tracks.indices.contains(targetIndex) else { return }
+    guard tracks.indices.contains(targetIndex) else {
+      pendingSeekTarget = nil
+      return
+    }
 
     loadQueue(from: targetIndex, seekTo: offset, autoPlay: isPlaying)
+    pendingSeekTarget = nil
     events.send(.seek(time))
   }
 
@@ -303,6 +345,56 @@ private extension AudioPlayer {
 }
 
 private extension AudioPlayer {
+  static let maxDecodeRetries = 10
+  static let decodeRetryRewind: TimeInterval = 1
+  static let decodeRetryStableDuration: TimeInterval = 3
+
+  /// Works around Apple's xHE-AAC (USAC) decoder bug FB22340742, where AVPlayer reports
+  /// "Cannot Decode" at certain positions and stays broken until the queue is rebuilt.
+  /// Rebuilding the queue a second earlier usually gets past the bad spot.
+  /// Returns true when the failure was taken over and playback was restarted.
+  func recoverFromDecodeFailure(_ error: Error?) -> Bool {
+    guard let error = error as? NSError,
+      error.domain == AVFoundationErrorDomain,
+      error.code == AVError.Code.decodeFailed.rawValue,
+      !tracks.isEmpty
+    else { return false }
+
+    guard decodeRetryCount < Self.maxDecodeRetries else {
+      AppLogger.player.error("Decode failure persists after \(Self.maxDecodeRetries) retries, giving up")
+      resetDecodeRetry()
+      return false
+    }
+
+    let position = player.currentSeconds > 0 ? time : mediaProgress.currentTime
+    let retryTime = max(0, position - Self.decodeRetryRewind)
+
+    decodeRetryCount += 1
+    decodeRetryTime = retryTime
+
+    AppLogger.player.warning(
+      "Decode failure at \(position), retry \(decodeRetryCount)/\(Self.maxDecodeRetries) from \(retryTime)"
+    )
+
+    let (trackIndex, offset) = trackAndOffset(for: retryTime)
+    loadQueue(from: trackIndex, seekTo: offset, autoPlay: wantsPlayback)
+    mediaProgress.currentTime = retryTime
+
+    return true
+  }
+
+  func resetDecodeRetryIfStable() {
+    guard let decodeRetryTime, time > decodeRetryTime + Self.decodeRetryStableDuration else { return }
+    resetDecodeRetry()
+  }
+
+  func resetDecodeRetry() {
+    decodeRetryCount = 0
+    decodeRetryTime = nil
+  }
+}
+
+private extension AudioPlayer {
   func setupObservers() {
     player.publisher(for: \.timeControlStatus)
       .removeDuplicates()
@@ -349,8 +441,9 @@ private extension AudioPlayer {
         case .readyToPlay:
           self.events.send(.stateChanged(.ready))
         case .failed:
-          self.requiresQueueReload = true
           self.logTerminalFailure("itemFailed", item: item, error: item.error)
+          guard !self.recoverFromDecodeFailure(item.error) else { return }
+          self.requiresQueueReload = true
           self.events.send(.error(item.error, shouldResume: self.playbackRequested))
         default:
           break
@@ -379,8 +472,9 @@ private extension AudioPlayer {
       .sink { [weak self] notification in
         guard let self else { return }
         let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-        self.requiresQueueReload = true
         self.logTerminalFailure("failedToEnd", item: item, error: error)
+        guard !self.recoverFromDecodeFailure(error) else { return }
+        self.requiresQueueReload = true
         self.events.send(.error(error, shouldResume: self.playbackRequested))
       }
       .store(in: &itemObservers)
@@ -423,6 +517,7 @@ private extension AudioPlayer {
     let interval = CMTime(seconds: 0.5, preferredTimescale: 1000)
     timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] _ in
       guard let self, self.player.currentSeconds > 0 else { return }
+      self.resetDecodeRetryIfStable()
       self.events.send(.timeUpdate(self.time))
     }
   }
@@ -681,11 +776,10 @@ extension LevelingStrength {
 
 extension AVPlayerItem {
   convenience init(url: URL, headers: [String: String]?) {
+    var options: [String: Any] = [:]
     if !url.isFileURL, let headers, !headers.isEmpty {
-      let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-      self.init(asset: asset)
-    } else {
-      self.init(asset: AVURLAsset(url: url))
+      options["AVURLAssetHTTPHeaderFieldsKey"] = headers
     }
+    self.init(asset: AVURLAsset(url: url, options: options))
   }
 }

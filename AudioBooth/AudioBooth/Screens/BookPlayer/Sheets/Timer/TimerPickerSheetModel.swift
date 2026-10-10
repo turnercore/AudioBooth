@@ -25,7 +25,6 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   private var suppressAutoTimerActivation = false
   private var lastObservedChapterIndex: Int = 0
   private var cancellables = Set<AnyCancellable>()
-  private var liveActivityCleanupTask: Task<Void, Never>?
   #if !targetEnvironment(macCatalyst)
   private var liveActivity: Activity<SleepTimerActivityAttributes>?
   #endif
@@ -354,7 +353,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     sleepTimer = nil
 
     pauseLiveActivity(remaining: originalTimerDuration)
-    scheduleLiveActivityCleanup()
+    SleepTimerActivityCleanup.shared.schedule(for: .expired)
 
     AppLogger.player.info("Timer expired - playback paused")
   }
@@ -417,7 +416,8 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     }
 
     current = .none
-    scheduleLiveActivityCleanup()
+    pauseLiveActivity(remaining: 0)
+    SleepTimerActivityCleanup.shared.schedule(for: .expired)
     AppLogger.player.info("Chapter timer expired - playback paused")
   }
 
@@ -495,6 +495,11 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   private func startAutoTimer(mode: AutoTimerMode) {
+    guard !AVAudioSession.sharedInstance().isCarPlayConnected else {
+      AppLogger.player.info("CarPlay is connected - skipping auto-timer")
+      return
+    }
+
     suppressAutoTimerActivation = false
     let position = player.time
 
@@ -708,8 +713,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 extension TimerPickerSheetViewModel {
   #if !targetEnvironment(macCatalyst)
   func startLiveActivity(duration: TimeInterval) {
-    liveActivityCleanupTask?.cancel()
-    liveActivityCleanupTask = nil
+    SleepTimerActivityCleanup.shared.cancel()
 
     let endTime = Date().addingTimeInterval(duration)
     let state = SleepTimerActivityAttributes.ContentState(
@@ -750,8 +754,7 @@ extension TimerPickerSheetViewModel {
   }
 
   func endLiveActivity() {
-    liveActivityCleanupTask?.cancel()
-    liveActivityCleanupTask = nil
+    SleepTimerActivityCleanup.shared.cancel()
 
     guard let liveActivity else { return }
 
@@ -760,20 +763,6 @@ extension TimerPickerSheetViewModel {
       AppLogger.player.info("Sleep timer Live Activity ended")
     }
     self.liveActivity = nil
-  }
-
-  func scheduleLiveActivityCleanup() {
-    liveActivityCleanupTask?.cancel()
-    liveActivityCleanupTask = Task {
-      do {
-        try await Task.sleep(for: .seconds(300))
-        guard !Task.isCancelled else { return }
-        endLiveActivity()
-        AppLogger.player.info("Live Activity cleaned up after 5 minutes of inactivity")
-      } catch {
-        AppLogger.player.debug("Live Activity cleanup task cancelled")
-      }
-    }
   }
 
   func pauseLiveActivity(remaining: TimeInterval? = nil) {
@@ -798,6 +787,7 @@ extension TimerPickerSheetViewModel {
       accentColor: preferences.accentColor
     )
     updateLiveActivity(state)
+    SleepTimerActivityCleanup.shared.schedule(for: .paused)
   }
   func resumeLiveActivityIfNeeded() {
     guard liveActivity != nil else { return }
@@ -818,13 +808,13 @@ extension TimerPickerSheetViewModel {
       accentColor: preferences.accentColor
     )
     updateLiveActivity(state)
+    SleepTimerActivityCleanup.shared.cancel()
   }
   #else
   func startLiveActivity(duration: TimeInterval) {}
   func updateLiveActivity(_ state: Any) {}
   func endLiveActivity() {}
   func pauseLiveActivity(remaining: TimeInterval? = nil) {}
-  func scheduleLiveActivityCleanup() {}
   func resumeLiveActivityIfNeeded() {}
   #endif
 }

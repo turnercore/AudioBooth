@@ -15,6 +15,8 @@ public final class LocalEpisode {
   public var track: Track?
   public var chapters: [Chapter]
   public var createdAt: Date = Date()
+  public var downloadedAt: Date?
+  public var coverFile: URL?
 
   public var isDownloaded: Bool { track?.relativePath != nil }
 
@@ -26,11 +28,29 @@ public final class LocalEpisode {
     chapters.sorted(by: { $0.start < $1.start })
   }
 
+  public var localCoverURL: URL? {
+    guard let coverFile else { return nil }
+
+    guard
+      let appGroupURL = FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
+      )
+    else {
+      return nil
+    }
+
+    let fileURL = appGroupURL.appendingPathComponent(coverFile.relativePath)
+    guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+    return fileURL
+  }
+
   public func coverURL(raw: Bool = false) -> URL? {
+    if let localCoverURL { return localCoverURL }
+
     guard var url = coverURL else { return nil }
 
     #if os(watchOS)
-    url.append(queryItems: [URLQueryItem(name: "format", value: "jpg")])
+    url.append(queryItems: [URLQueryItem(name: "format", value: "jpeg")])
     #else
     if raw {
       url.append(queryItems: [URLQueryItem(name: "raw", value: "1")])
@@ -52,7 +72,8 @@ public final class LocalEpisode {
     coverURL: URL? = nil,
     track: Track? = nil,
     chapters: [Chapter] = [],
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    downloadedAt: Date? = nil
   ) {
     self.episodeID = episodeID
     self.podcast = podcast
@@ -66,6 +87,7 @@ public final class LocalEpisode {
     self.track = track
     self.chapters = chapters
     self.createdAt = createdAt
+    self.downloadedAt = downloadedAt
   }
 }
 
@@ -94,6 +116,11 @@ extension LocalEpisode {
     let context = ModelContextProvider.shared.context
 
     if let existing = try LocalEpisode.fetch(episodeID: self.episodeID) {
+      if #unavailable(iOS 18, watchOS 11, tvOS 18, macOS 15) {
+        episodeID = UUID().uuidString
+        context.insert(self)
+      }
+
       existing.podcast = self.podcast
       existing.title = self.title
       existing.duration = self.duration
@@ -102,6 +129,8 @@ extension LocalEpisode {
       existing.episodeDescription = self.episodeDescription
       existing.publishedAt = self.publishedAt
       existing.coverURL = self.coverURL
+      existing.coverFile = self.coverFile ?? existing.coverFile
+      existing.downloadedAt = self.downloadedAt ?? existing.downloadedAt
       existing.chapters = self.chapters
 
       if let newTrack = self.track {
@@ -110,6 +139,10 @@ extension LocalEpisode {
         if existingRelativePath != nil && newTrack.relativePath == nil {
           existing.track?.relativePath = existingRelativePath
         }
+      }
+
+      if #unavailable(iOS 18, watchOS 11, tvOS 18, macOS 15) {
+        context.delete(self)
       }
     } else {
       context.insert(self)

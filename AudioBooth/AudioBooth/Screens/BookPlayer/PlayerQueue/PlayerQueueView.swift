@@ -57,7 +57,7 @@ struct PlayerQueueView: View {
         }
       }
       .scrollContentBackground(.hidden)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
       .navigationTitle("Queue")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -84,7 +84,7 @@ struct PlayerQueueView: View {
         .bold()
         .background(.regularMaterial)
       }
-      .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
+      .navigationDestinations()
     }
   }
 }

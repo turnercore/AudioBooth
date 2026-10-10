@@ -4,6 +4,7 @@ import Foundation
 import Logging
 import Models
 import Nuke
+import SwiftData
 import SwiftUI
 
 final class BookDetailsViewModel: BookDetailsView.Model {
@@ -13,6 +14,7 @@ final class BookDetailsViewModel: BookDetailsView.Model {
   private var downloadManager: DownloadManager { .shared }
   private var playerManager: PlayerManager { .shared }
   private var authenticationService: AuthenticationService { Audiobookshelf.shared.authentication }
+  private var watchConnectivityManager: WatchConnectivityManager { .shared }
 
   private var cancellables = Set<AnyCancellable>()
   private var progressObservation: Task<Void, Never>?
@@ -47,15 +49,21 @@ final class BookDetailsViewModel: BookDetailsView.Model {
   }
 
   override func onAppear() {
+    progressObservation?.cancel()
+    itemObservation?.cancel()
+    cancellables.removeAll()
+
     Task {
       await loadLocalBook()
       await loadBookFromAPI()
     }
+
     setupDownloadStateBinding()
     setupProgressObservation()
     setupItemObservation()
     setupPlayerStateObservation()
     setupQueueObservation()
+    setupWatchObservation()
   }
 
   private func loadLocalBook() async {
@@ -119,26 +127,14 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     }
   }
 
-  private func refreshCover() {
-    Task {
-      do {
-        let request = ImageRequest(url: coverURL, options: .reloadIgnoringCachedData)
-        let image = try await ImagePipeline.shared.image(for: request)
-        shareCoverImage = Image(uiImage: image)
-        let coverURL = self.coverURL
-        self.coverURL = nil
-        Task { @MainActor in
-          self.coverURL = coverURL
-        }
-      } catch {
-        AppLogger.viewModel.debug("Failed to refresh cover: \(error)")
-      }
+  override var shareCoverImage: Image? {
+    guard let container = ImagePipeline.shared.cache.cachedImage(for: ImageRequest(url: coverURL)) else {
+      return nil
     }
+    return Image(uiImage: container.image)
   }
 
   private func loadBookFromAPI() async {
-    refreshCover()
-
     do {
       let book = try await booksService.fetch(id: bookID)
       self.book = book
@@ -224,9 +220,9 @@ final class BookDetailsViewModel: BookDetailsView.Model {
       error = nil
       isLoading = false
 
-      if localBook != nil {
-        let updated = LocalBook(from: book)
-        try? updated.save()
+      if localBook?.isDeleted == false {
+        try? LocalBook(from: book).save()
+        downloadManager.backfillMissingCovers()
       }
 
       await loadSessions()
@@ -427,6 +423,20 @@ final class BookDetailsViewModel: BookDetailsView.Model {
       .store(in: &cancellables)
   }
 
+  private func setupWatchObservation() {
+    watchConnectivityManager.$watchDownloadedBookIDs
+      .combineLatest(watchConnectivityManager.$canDownloadToWatch)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.updateActions()
+      }
+      .store(in: &cancellables)
+  }
+
+  override func onDownloadToWatchTapped() {
+    watchConnectivityManager.requestWatchDownload(bookID: bookID)
+  }
+
   private func setupQueueObservation() {
     playerManager.$queue
       .receive(on: DispatchQueue.main)
@@ -466,6 +476,14 @@ final class BookDetailsViewModel: BookDetailsView.Model {
 
     if metadata.isEbook, !ereaderDevices.isEmpty {
       updatedActions.insert(.sendToEbook)
+    }
+
+    if metadata.hasAudio,
+      authenticationService.server?.permissions?.download == true,
+      watchConnectivityManager.canDownloadToWatch,
+      !watchConnectivityManager.watchDownloadedBookIDs.contains(bookID)
+    {
+      updatedActions.insert(.downloadToWatch)
     }
 
     var shareItems: [BookShareItem] = []

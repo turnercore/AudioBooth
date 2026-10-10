@@ -15,7 +15,7 @@
 - Treat `personal-main` as a maintained product branch, not as a clean mirror of upstream.
 - Use `upstream/main` as the source of upstream updates. Merge it into `personal-main` after reviewing incoming commits and the personal delta; rebase the published personal branch only when explicitly requested.
 - Preserve intentional personal-branch differences during upstream syncs: removed monetization, personal signing and entitlements, stability/security hardening, package-boundary cleanup, and playback/AirPlay behavior that still differs from upstream.
-- Resolve upstream conflicts semantically. Before accepting either side, inspect `git log upstream/main..personal-main` and the affected file history so an upstream edit does not silently restore a deliberately removed feature.
+- Resolve upstream conflicts semantically. Before accepting either side, inspect `git log upstream/main..personal-main` and the affected file history so an upstream edit does not silently restore a deliberately removed feature. When upstream fixes the same issue as a personal patch, prefer the upstream implementation; retain only distinct personal behavior.
 - Do not merge `personal-main` into upstream `main` from this repo unless the user explicitly asks for that.
 - Always commit finished repo changes.
 - Use Swift 6.2 and the existing SwiftUI/ViewModel patterns.

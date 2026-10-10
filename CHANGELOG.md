@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Fuzzy author and narrator search - Suggest close name matches for misspelled searches
+- Apple Watch improvements - Send a book to your watch directly from the book details page on iPhone, and hand off playback from the watch player to your iPhone
+- Ebook reader Play from Here - Select a passage in the ebook to start the audiobook from that spot, with Catch Up now offered directly in the reader's player
+- Dynamic progress bar color - New player preference to tint the progress bar with the book cover color
+- Podcast library improvements - Home sections now show episode cards for the latest episodes, and the latest episodes page adds swipe actions to queue or mark as finished, a context menu, and a play button on each episode
+
+### Changed
+- Book player improvements - The player now opens full screen with a zoom transition from the mini player, with refreshed controls, a time bubble while scrubbing, and fine scrubbing (drag down for half-speed or quarter-speed precision)
+- iPhone Duo - Layouts now adapt around the hinge on book details, podcast details, the player, and library pages
+- Progress sync - The currently playing item now refreshes its progress from the server when you return to the app
+
+### Fixed
+- Continue Listening - Fixed removing the currently playing book from Continue Listening
+- Smart rewind - Fixed smart rewind when streaming
+- Mark as finished - Fixed an issue where marking a book as finished could fail during playback
+- Home page - Fixed home sections not updating correctly after switching libraries
+- Watch app covers - Fixed covers not displaying correctly on the watch app
+
+## [1.12.0]
+
+### Added
+- Catch Up - When you've read further in the ebook than you've listened, the player offers to skip the audiobook to where you stopped reading. Everything runs on device and requires iOS 26, with both the ebook and audiobook downloaded
+- Page Match - Point the camera at a page of your printed book, or pick a photo of one you took earlier, to jump to that spot in the audiobook. Everything runs on device and requires iOS 26 (thanks @andrespinones)
+- Read Along - Follow the ebook while the audiobook plays, with the narrated sentence highlighted and the page turning itself. Transcription happens entirely on device and requires iOS 26
 - Total counts - Show total item counts on the library, authors, series, and collections pages
 - Sleep timer Focus intent - Activate the auto sleep timer using a Focus (thanks @fivezeroes)
 - Sleep timer pause behavior - Configurable sleep timer behavior when playback is paused (thanks @fivezeroes)

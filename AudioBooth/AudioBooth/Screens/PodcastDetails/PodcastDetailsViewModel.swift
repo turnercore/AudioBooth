@@ -78,6 +78,7 @@ nonisolated struct PodcastEpisodeProjection: Sendable {
   let duration: Double?
   let size: Int64?
   let description: String?
+  let summary: String?
   let chapters: [PodcastEpisodeProjectionInput.Chapter]
   let apiEpisode: PodcastEpisode?
 }
@@ -161,6 +162,7 @@ nonisolated enum PodcastEpisodeProjector {
           duration: input.duration,
           size: input.size,
           description: input.description,
+          summary: input.description?.htmlStripped,
           chapters: chapters,
           apiEpisode: input.apiEpisode
         )
@@ -499,6 +501,7 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
         duration: projection.duration,
         size: projection.size,
         description: projection.description,
+        summary: projection.summary,
         isCompleted: progress >= 1.0,
         progress: progress,
         chapters: projection.chapters.map {

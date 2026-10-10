@@ -9,7 +9,6 @@ struct BookPlayer: View {
 
   @Environment(\.dismiss) private var dismiss
 
-  @Environment(\.verticalSizeClass) private var verticalSizeClass
   @ObservedObject private var playerManager = PlayerManager.shared
   @ObservedObject private var preferences = UserPreferences.shared
 
@@ -31,16 +30,41 @@ struct BookPlayer: View {
           .accessibilityHidden(true)
           .ignoresSafeArea()
 
-        Group {
-          if verticalSizeClass == .compact {
-            landscapeLayout
-          } else {
-            portraitLayout
+        GeometryReader { proxy in
+          Group {
+            if proxy.size.width > proxy.size.height {
+              landscapeLayout(artworkWidth: proxy.leadingPanelWidth.map { $0 - 24 })
+            } else {
+              portraitLayout(artworkHeight: proxy.topPanelHeight)
+            }
           }
+          .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+
+        if model.isLocked {
+          unlockOverlay
+        }
+
+        if let message = model.positionSyncMessage, !model.isLocked {
+          VStack {
+            PositionSyncBanner(
+              message: message,
+              onCatchUp: model.onPositionSyncOfferAccepted,
+              onDismiss: model.onPositionSyncDismissed
+            )
+
+            Spacer()
+          }
+          .transition(.move(edge: .top).combined(with: .opacity))
         }
       }
+      .animation(.easeInOut, value: model.isLocked)
+      .animation(.easeInOut, value: model.positionSyncMessage)
       .orientationLock(supportedOrientations)
-      .onAppear { UIApplication.shared.isIdleTimerDisabled = preferences.keepScreenAwakeInPlayer }
+      .onAppear {
+        UIApplication.shared.isIdleTimerDisabled = preferences.keepScreenAwakeInPlayer
+        model.onAppear()
+      }
       .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
       .onChange(of: preferences.keepScreenAwakeInPlayer) { _, newValue in
         UIApplication.shared.isIdleTimerDisabled = newValue
@@ -123,8 +147,24 @@ struct BookPlayer: View {
               }
             }
 
+            if model.isLocked {
+              Button(action: { model.onUnlockTapped() }) {
+                Label("Unlock", systemImage: "lock.open.fill")
+              }
+            } else if disabledControls.contains(.lock) {
+              Button(action: { model.onLockTapped() }) {
+                Label(PlayerControl.lock.displayName, systemImage: PlayerControl.lock.systemImage)
+              }
+            }
+
             Button(action: { model.isQueuePresented = true }) {
               Label("Queue", systemImage: "list.bullet")
+            }
+
+            if model.supportsPageMatch, disabledControls.contains(.pageMatch) {
+              Button(action: { model.onPageMatchTapped() }) {
+                Label(PlayerControl.pageMatch.displayName, systemImage: PlayerControl.pageMatch.systemImage)
+              }
             }
 
             Divider()
@@ -138,7 +178,7 @@ struct BookPlayer: View {
           .tint(.primary)
         }
       }
-      .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
+      .navigationDestinations()
     }
     .preferredColorScheme(.dark)
     .sheet(
@@ -189,6 +229,12 @@ struct BookPlayer: View {
     .sheet(isPresented: $model.isQueuePresented) {
       PlayerQueueView(model: PlayerQueueViewModel())
     }
+    .sheet(item: $model.pageMatch) { pageMatch in
+      PageMatchSheet(model: pageMatch)
+    }
+    .sheet(item: $model.positionSync) { positionSync in
+      PositionSyncSheet(model: positionSync)
+    }
     .sheet(isPresented: $model.isSettingsPresented) {
       NavigationStack {
         PlayerPreferencesView()
@@ -230,10 +276,11 @@ struct BookPlayer: View {
     }
   }
 
-  private var portraitLayout: some View {
+  private func portraitLayout(artworkHeight: CGFloat?) -> some View {
     VStack(spacing: 0) {
       VStack(spacing: 0) {
         Artwork(model: model)
+          .frame(height: artworkHeight)
 
         Spacer(minLength: 24)
 
@@ -249,14 +296,15 @@ struct BookPlayer: View {
       }
       .padding(.horizontal, 24)
       .disabled(model.isLoading)
+      .allowsHitTesting(!model.isLocked)
     }
   }
 
-  private var landscapeLayout: some View {
+  private func landscapeLayout(artworkWidth: CGFloat?) -> some View {
     HStack(spacing: 24) {
       Artwork(model: model)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .containerRelativeFrame(.horizontal) { width, _ in width * 0.4 }
+        .containerRelativeFrame(.horizontal) { width, _ in artworkWidth ?? width * 0.4 }
 
       VStack(spacing: 24) {
         Spacer()
@@ -272,6 +320,7 @@ struct BookPlayer: View {
       .frame(maxWidth: .infinity)
       .padding(.horizontal, 24)
       .disabled(model.isLoading)
+      .allowsHitTesting(!model.isLocked)
     }
     .padding(.horizontal, 24)
   }
@@ -315,6 +364,37 @@ struct BookPlayer: View {
     .foregroundColor(.white.opacity(0.7))
     .padding(.vertical, 12)
     .buttonStyle(.borderless)
+    .opacity(model.isLocked ? 0 : 1)
+  }
+
+  private var unlockOverlay: some View {
+    VStack {
+      Spacer()
+
+      HStack(spacing: 6) {
+        Image(systemName: "lock.fill")
+        Text("Hold to unlock")
+      }
+      .font(.footnote)
+      .fontWeight(.bold)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
+      .background(Color.black.opacity(0.7))
+      .foregroundColor(.white)
+      .clipShape(.capsule)
+      .contentShape(.capsule)
+      .onLongPressGesture(minimumDuration: 1) {
+        Haptics.impact(.medium)
+        model.onUnlockTapped()
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityAddTraits(.isButton)
+      .accessibilityLabel("Player locked")
+      .accessibilityHint("Touch and hold to unlock")
+      .accessibilityAction { model.onUnlockTapped() }
+    }
+    .padding(.bottom, 24)
+    .transition(.opacity)
   }
 
   @ViewBuilder
@@ -418,6 +498,38 @@ struct BookPlayer: View {
         }
       }
       .frame(maxWidth: .infinity)
+
+    case .lock:
+      Button(action: {
+        Haptics.impact(.soft)
+        model.onLockTapped()
+      }) {
+        VStack(spacing: 6) {
+          Image(systemName: control.systemImage)
+            .font(.system(size: 20))
+            .frame(width: 20, height: 20)
+          Text(control.displayName)
+            .font(.caption2)
+        }
+      }
+      .frame(maxWidth: .infinity)
+
+    case .pageMatch:
+      if model.supportsPageMatch {
+        Button(action: {
+          Haptics.impact(.soft)
+          model.onPageMatchTapped()
+        }) {
+          VStack(spacing: 6) {
+            Image(systemName: control.systemImage)
+              .font(.system(size: 20))
+              .frame(width: 20, height: 20)
+            Text(control.displayName)
+              .font(.caption2)
+          }
+        }
+        .frame(maxWidth: .infinity)
+      }
     }
   }
 }
@@ -433,7 +545,7 @@ extension BookPlayer {
           : NavigationDestination.book(id: model.id)
       ) {
         Cover(url: model.coverURL, style: .plain)
-          .frame(minWidth: 200, maxWidth: 400, minHeight: 200, maxHeight: 400)
+          .frame(minWidth: 200, maxWidth: 600, minHeight: 200, maxHeight: 600)
           .aspectRatio(1, contentMode: .fit)
           .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 10)
       }
@@ -534,11 +646,23 @@ extension BookPlayer {
 
     var downloadState: DownloadManager.DownloadState
     var backgroundColor: Color = .black
+    var progressTint: Color?
 
     var isPresented: Bool = true
     var isSettingsPresented: Bool = false
     var isQueuePresented: Bool = false
+    var isLocked: Bool = false
+    var supportsPageMatch: Bool = false
+    var pageMatch: PageMatchSheet.Model?
+    var positionSyncMessage: LocalizedStringResource?
+    var positionSync: PositionSyncSheet.Model?
 
+    var secondsFromStartOfBook: TimeInterval { 0 }
+
+    func onLockTapped() { isLocked = true }
+    func onUnlockTapped() { isLocked = false }
+
+    func onAppear() {}
     func onTogglePlaybackTapped() {}
     func onPauseTapped() {}
     func onPlayTapped() {}
@@ -547,6 +671,10 @@ extension BookPlayer {
     func onDownloadTapped() {}
     func onBookmarksTapped() {}
     func onHistoryTapped() {}
+    func onPageMatchTapped() {}
+    func onPositionSyncTapped() {}
+    func onPositionSyncOfferAccepted() {}
+    func onPositionSyncDismissed(_ scope: PositionSyncOffer.Dismissal) {}
 
     init(
       id: String = UUID().uuidString,

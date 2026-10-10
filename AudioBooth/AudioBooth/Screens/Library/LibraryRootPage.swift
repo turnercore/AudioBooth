@@ -4,6 +4,8 @@ import SwiftUI
 
 struct LibraryRootPage: View {
   @Environment(\.appTheme) var theme
+  @Environment(\.isPartiallyFolded) private var isPartiallyFolded
+
   enum LibraryType: CaseIterable {
     case library
     case authors
@@ -23,10 +25,11 @@ struct LibraryRootPage: View {
     NavigationStack(path: $model.path) {
       LibraryRootContent(selected: $model.selected)
         .id(libraries.current?.id)
-        .background(theme.colors.background.page)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.colors.background.page.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .principal) {
+          ToolbarItem(placement: isPartiallyFolded ? .topBarLeading : .principal) {
             Picker("Library Type", selection: $model.selected) {
               Text("Library").tag(LibraryType.library)
               Text("Authors").tag(LibraryType.authors)
@@ -37,8 +40,9 @@ struct LibraryRootPage: View {
             .tint(.primary)
             .fixedSize(horizontal: true, vertical: true)
           }
+          .sharedBackgroundHidden()
         }
-        .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
+        .navigationDestinations()
     }
   }
 }

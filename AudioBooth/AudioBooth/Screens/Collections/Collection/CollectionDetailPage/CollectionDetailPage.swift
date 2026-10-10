@@ -34,7 +34,7 @@ struct CollectionDetailPage: View {
         listView
       }
     }
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       if model.mode == .playlists {
@@ -94,7 +94,7 @@ struct CollectionDetailPage: View {
               set: { if $0 { preferences.libraryDisplayMode = .row } }
             )
           ) {
-            Label("List View", systemImage: "rectangle.grid.1x3")
+            Label("List View", systemImage: "rectangle.grid.1x2")
           }
 
           Divider()

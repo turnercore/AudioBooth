@@ -71,31 +71,13 @@ final class ContinueListeningBookCardModel: BookCard.Model {
     setupDownloadProgressObserver()
   }
 
-  init(localEpisode episode: LocalEpisode) {
-    super.init(
-      id: episode.episodeID,
-      podcastID: episode.podcast?.podcastID,
-      title: episode.title,
-      details: nil,
-      cover: Cover.Model(
-        url: episode.coverURL,
-        title: episode.title,
-        author: episode.podcast?.author,
-        progress: MediaProgress.progress(for: episode.episodeID)
-      ),
-      author: episode.podcast?.author,
-      timeRemaining: episode.duration
-    )
-
-    observeMediaProgress()
-    setupDownloadProgressObserver()
-  }
-
-  override func onAppear() {
-    mediaProgress = try? MediaProgress.fetch(bookID: id)
+  isolated deinit {
+    progressObservation?.cancel()
   }
 
   private func observeMediaProgress() {
+    mediaProgress = try? MediaProgress.fetch(bookID: id)
+
     let bookID = id
     progressObservation = Task { [weak self] in
       for await mediaProgress in MediaProgress.observe(bookID: bookID) {
@@ -117,9 +99,6 @@ final class ContinueListeningBookCardModel: BookCard.Model {
       }
   }
 
-  isolated deinit {
-    progressObservation?.cancel()
-  }
 }
 
 extension ContinueListeningBookCardModel {

@@ -29,6 +29,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     UISegmentedControl.appearance().apportionsSegmentWidthsByContent = true
+    UIView.appearance(whenContainedInInstancesOf: [UIAlertController.self]).tintColor = .label
 
     AppLogger.bootstrap()
 
@@ -56,6 +57,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     _ = WatchConnectivityManager.shared
     _ = SessionManager.shared
+    _ = SleepTimerActivityCleanup.shared
     _ = UserPreferences.shared
     _ = KeepOfflineManager.shared
 
@@ -64,12 +66,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     let player: PlayerManagerProtocol = PlayerManager.shared
     AppDependencyManager.shared.add(dependency: player)
 
+    PlayerManager.shared.restoreLastPlayer()
+
     Task { @MainActor in
       await DownloadManager.shared.reattachInFlightDownloads()
-      await PlayerManager.shared.restoreLastPlayer()
       await Audiobookshelf.shared.authentication.checkServersHealth()
       await StorageManager.shared.cleanupUnusedDownloads()
       DownloadManager.shared.resumeOutstandingRequests()
+      DownloadManager.shared.backfillMissingCovers()
+      DownloadManager.shared.backfillDownloadDates()
     }
 
     #if !targetEnvironment(macCatalyst)

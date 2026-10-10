@@ -33,6 +33,7 @@
 		3FEB781C2F059A3B00618BF9 /* Recording in Frameworks */ = {isa = PBXBuildFile; productRef = 3FEB781B2F059A3B00618BF9 /* Recording */; };
 		3FEB781E2F059A3B00618BF9 /* Reporting in Frameworks */ = {isa = PBXBuildFile; productRef = 3FEB781D2F059A3B00618BF9 /* Reporting */; };
 		3FEB78222F059BEC00618BF9 /* Installations in Frameworks */ = {isa = PBXBuildFile; productRef = 3FEB78212F059BEC00618BF9 /* Installations */; };
+		3FF3F924304D188B00FFE416 /* CHANGELOG.md in Resources */ = {isa = PBXBuildFile; fileRef = 3FF3F923304D188B00FFE416 /* CHANGELOG.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -113,6 +114,7 @@
 		3F75FB462E7139F700F77C1B /* API */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = API; path = ../API; sourceTree = SOURCE_ROOT; };
 		3FBEA0652E8CD49300976BA0 /* AudioBooth Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AudioBooth Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3FC8DC6E2E638F5E00A4B080 /* AudioBooth.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AudioBooth.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3FF3F923304D188B00FFE416 /* CHANGELOG.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = CHANGELOG.md; path = ../CHANGELOG.md; sourceTree = SOURCE_ROOT; };
 		FFCB24C52F64F5B300F4DBE1 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -279,11 +281,12 @@
 			children = (
 				3FC8DC702E638F5E00A4B080 /* AudioBooth */,
 				7A0000030000000000000003 /* AudioBoothTests */,
-				3FC8DC822E63904C00A4B080 /* Packages */,
 				3FBEA0662E8CD49300976BA0 /* AudioBooth Watch App */,
-				3F2D3BF82EBE711800D49AFF /* AudioBoothWidget */,
 				3F5A20532F6E656C00CFD89E /* AudioBoothWatchWidget */,
+				3F2D3BF82EBE711800D49AFF /* AudioBoothWidget */,
+				3FF3F923304D188B00FFE416 /* CHANGELOG.md */,
 				3F6E94DB2E6395A20039F187 /* Frameworks */,
+				3FC8DC822E63904C00A4B080 /* Packages */,
 				3FC8DC6F2E638F5E00A4B080 /* Products */,
 				FFCB24C52F64F5B300F4DBE1 /* Signing.xcconfig */,
 			);
@@ -490,11 +493,14 @@
 			knownRegions = (
 				en,
 				Base,
-				fr,
 				da,
 				de,
-				"zh-tw",
 				es,
+				fr,
+				it,
+				ru,
+				"zh-Hans",
+				"zh-TW",
 			);
 			mainGroup = 3FC8DC652E638F5E00A4B080;
 			minimizedProjectReferenceProxies = 1;
@@ -554,6 +560,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3FF3F924304D188B00FFE416 /* CHANGELOG.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -569,6 +576,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
 			);
 			name = "Set Build Number";
 			outputFileListPaths = (
@@ -707,7 +715,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.widget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -738,7 +746,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.widget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -769,7 +777,7 @@
 					"@executable_path/../../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.watchkitapp.AudioBoothWatchWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -802,7 +810,7 @@
 					"@executable_path/../../Frameworks",
 					"@executable_path/../../../../Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.watchkitapp.AudioBoothWatchWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -833,7 +841,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.watchkitapp";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -865,7 +873,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS.watchkitapp";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -1035,7 +1043,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1078,7 +1086,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.12;
+				MARKETING_VERSION = 1.13;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(ORG_IDENTIFIER).AudioBS";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1159,7 +1167,7 @@
 			repositoryURL = "https://github.com/NuPlay/RichText.git";
 			requirement = {
 				kind = exactVersion;
-				version = 3.0.2;
+				version = 3.1.1;
 			};
 		};
 		3F2F21CF2EE68DFB00A298C6 /* XCRemoteSwiftPackageReference "swift-toolkit" */ = {
@@ -1167,7 +1175,7 @@
 			repositoryURL = "https://github.com/readium/swift-toolkit.git";
 			requirement = {
 				kind = exactVersion;
-				version = 3.9.0;
+				version = 3.11.0;
 			};
 		};
 		3F5C74552EDE598700976431 /* XCRemoteSwiftPackageReference "swift-log" */ = {
@@ -1175,7 +1183,7 @@
 			repositoryURL = "https://github.com/apple/swift-log";
 			requirement = {
 				kind = exactVersion;
-				version = 1.13.1;
+				version = 1.15.1;
 			};
 		};
 		3F5C74582EDE5B2400976431 /* XCRemoteSwiftPackageReference "PulseLogHandler" */ = {
@@ -1191,7 +1199,7 @@
 			repositoryURL = "https://github.com/kean/Pulse";
 			requirement = {
 				kind = exactVersion;
-				version = 5.2.2;
+				version = 5.2.3;
 			};
 		};
 		3F8C4A012F78A00100B4D111 /* XCRemoteSwiftPackageReference "Nuke" */ = {
@@ -1199,7 +1207,7 @@
 			repositoryURL = "https://github.com/kean/Nuke.git";
 			requirement = {
 				kind = exactVersion;
-				version = 13.0.6;
+				version = 13.2.0;
 			};
 		};
 		3FEB781A2F059A3B00618BF9 /* XCRemoteSwiftPackageReference "KSCrash" */ = {
@@ -1207,7 +1215,7 @@
 			repositoryURL = "https://github.com/kstenerud/KSCrash";
 			requirement = {
 				kind = exactVersion;
-				version = 2.5.1;
+				version = 2.6.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

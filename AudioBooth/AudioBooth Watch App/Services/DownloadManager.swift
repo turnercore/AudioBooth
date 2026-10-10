@@ -9,6 +9,7 @@ final class DownloadManager: NSObject, ObservableObject {
   enum DownloadState: Equatable {
     case notDownloaded
     case downloading(progress: Double)
+    case paused(progress: Double)
     case downloaded
   }
 
@@ -25,14 +26,57 @@ final class DownloadManager: NSObject, ObservableObject {
   private var activeOperations: [String: DownloadOperation] = [:]
   private var progressTasks: [String: Task<Void, Never>] = [:]
   @Published private(set) var currentProgress: [String: Double] = [:]
+  @Published private(set) var activeBookIDs: Set<String> = []
+  private var cancellables = Set<AnyCancellable>()
+
+  private override init() {
+    super.init()
+    Publishers.CombineLatest3(
+      connectivityManager.$watchTransferJobs,
+      connectivityManager.$watchTransferByteProgress,
+      connectivityManager.$durablyRequestedBookIDs
+    )
+    .receive(on: DispatchQueue.main)
+    .sink { [weak self] jobs, byteProgress, requested in
+      guard let self else { return }
+      let active = jobs.filter { $0.state == .queued || $0.state == .transferring }
+      currentProgress = Dictionary(
+        active.map { ($0.bookID, byteProgress[$0.transferID]?.fraction ?? $0.progress) },
+        uniquingKeysWith: { _, latest in latest }
+      )
+      activeBookIDs = Set(active.map { $0.bookID }).union(requested)
+    }
+    .store(in: &cancellables)
+  }
+
+  func start() {
+    cleanupOrphanedDownloads()
+  }
+
+  func applicationDidBecomeActive() {
+    WatchShareDownloadCoordinator.shared.resumePersistedTransfers()
+    WatchFileTransferReceiver.resumeRelayTransfers()
+  }
+
+  func downloadState(for bookID: String) -> DownloadState {
+    if localStorage.books.contains(where: { $0.id == bookID && $0.isDownloaded }) {
+      return .downloaded
+    }
+    if isDownloading(for: bookID) {
+      return .downloading(progress: currentProgress[bookID] ?? 0)
+    }
+    return .notDownloaded
+  }
 
   func isDownloading(for bookID: String) -> Bool {
-    connectivityManager.watchTransferJobs.contains {
-      $0.bookID == bookID && ($0.state == .queued || $0.state == .transferring)
-    }
+    connectivityManager.durablyRequestedBookIDs.contains(bookID)
+      || connectivityManager.watchTransferJobs.contains {
+        $0.bookID == bookID && ($0.state == .queued || $0.state == .transferring)
+      }
   }
 
   func startDownload(for book: WatchBook) {
+    guard !isDownloading(for: book.id) else { return }
     connectivityManager.requestWatchTransfer(bookID: book.id)
   }
 
@@ -103,6 +147,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
 extension DownloadManager {
   func deleteDownload(for bookID: String) {
+    cancelDownload(for: bookID)
     guard
       let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         .first
