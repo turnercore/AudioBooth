@@ -278,17 +278,46 @@ extension SessionManager {
   }
 
   private func refreshProgress(itemID: String, episodeID: String? = nil) {
+    guard let serverID = audiobookshelf.authentication.server?.id,
+      ModelContextProvider.shared.activeServerID == serverID
+    else { return }
+    let context = ModelContextProvider.shared.context
+
     Task {
       do {
         let progressID = episodeID.map { "\(itemID)/\($0)" } ?? itemID
         let apiProgress = try await audiobookshelf.progress.fetch(bookID: progressID)
+        guard audiobookshelf.authentication.server?.id == serverID,
+          ModelContextProvider.shared.activeServerID == serverID,
+          ModelContextProvider.shared.context === context
+        else { return }
         guard let mediaProgress = try MediaProgress.fetch(bookID: episodeID ?? itemID) else { return }
-        mediaProgress.update(from: apiProgress)
+        let localBook = episodeID == nil ? try LocalBook.fetch(bookID: itemID) : nil
+        Self.applyRefreshedProgress(
+          apiProgress,
+          to: mediaProgress,
+          localDuration: localBook?.isDownloaded == true ? localBook?.duration : nil
+        )
         try mediaProgress.save()
       } catch {
         AppLogger.session.debug("Failed to refresh progress: \(error)")
       }
     }
+  }
+
+  static func applyRefreshedProgress(
+    _ apiProgress: User.MediaProgress,
+    to mediaProgress: MediaProgress,
+    localDuration: TimeInterval?
+  ) {
+    mediaProgress.update(from: apiProgress)
+    // Server metadata may describe a different timeline than the downloaded assets.
+    guard let localDuration, localDuration.isFinite, localDuration > 0 else { return }
+    mediaProgress.duration = localDuration
+    mediaProgress.currentTime = min(localDuration, max(0, mediaProgress.currentTime))
+    mediaProgress.progress = mediaProgress.currentTime / localDuration
+    mediaProgress.isFinished = mediaProgress.progress >= 1
+    mediaProgress.finishedAt = mediaProgress.isFinished ? (mediaProgress.finishedAt ?? Date()) : nil
   }
 
   private func startLocalSession(

@@ -1,3 +1,4 @@
+import API
 import Models
 import XCTest
 
@@ -5,6 +6,57 @@ import XCTest
 
 @MainActor
 final class PlaybackRegressionTests: XCTestCase {
+  func testProgressRefreshPreservesLocalTimelineForStaleAndNewResponses() throws {
+    try ModelContextProvider.shared.useInMemoryContainer(for: "refresh-regression")
+    for (remoteUpdate, expectedTime) in [(1_000, 45.0), (3_000, 60.0)] {
+      let progress = MediaProgress(
+        bookID: "refresh-regression",
+        currentTime: 45,
+        duration: 60,
+        progress: 0.75,
+        lastUpdate: Date(timeIntervalSince1970: 2)
+      )
+      let data = Data(
+        """
+        {"id":"remote-progress","libraryItemId":"refresh-regression",
+         "duration":120,"progress":0.5,"isFinished":false,
+         "startedAt":0,"currentTime":60,"lastUpdate":\(remoteUpdate)}
+        """.utf8
+      )
+      let remote = try JSONDecoder().decode(User.MediaProgress.self, from: data)
+
+      SessionManager.applyRefreshedProgress(remote, to: progress, localDuration: 60)
+
+      XCTAssertEqual(progress.duration, 60)
+      XCTAssertEqual(progress.currentTime, expectedTime)
+      XCTAssertEqual(progress.progress, expectedTime / 60)
+      XCTAssertEqual(progress.isFinished, expectedTime == 60)
+      XCTAssertEqual(progress.finishedAt != nil, expectedTime == 60)
+    }
+  }
+
+  func testEmptyNextItemResponseCannotClearNewSelection() async {
+    let manager = PlayerManager.shared
+    let previousPlayer = manager.current
+    let previousPresentation = manager.isShowingFullPlayer
+    defer {
+      manager.current = previousPlayer
+      manager.isShowingFullPlayer = previousPresentation
+    }
+    let original = BookPlayer.Model.mock
+    let replacement = BookPlayer.Model.mock
+    manager.current = original
+
+    await manager.resolveNext(autoPlay: false) { itemID, _ in
+      XCTAssertEqual(itemID, original.id)
+      await Task.yield()
+      manager.current = replacement
+      return nil
+    }
+
+    XCTAssertTrue(manager.current === replacement)
+  }
+
   func testMeasuredLocalTimelineReplacesDoubledMetadataDuration() {
     let timeline = LocalPlaybackTimeline.make(
       measuredTracks: [
