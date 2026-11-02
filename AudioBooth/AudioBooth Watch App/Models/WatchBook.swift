@@ -2,15 +2,20 @@ import Foundation
 
 struct WatchBook: Codable, Identifiable {
   let id: String
+  let podcastID: String?
   let sessionID: String?
   let title: String
   let authorName: String?
   var coverURL: URL?
   var coverRelativePath: String?
   let duration: Double
-  let chapters: [WatchChapter]
+  var chapters: [WatchChapter]
   var tracks: [WatchTrack]
   var currentTime: Double
+
+  var itemID: String {
+    podcastID ?? id
+  }
 
   var timeRemaining: Double {
     max(0, duration - currentTime)
@@ -47,6 +52,7 @@ struct WatchBook: Codable, Identifiable {
 
   init(
     id: String,
+    podcastID: String? = nil,
     sessionID: String? = nil,
     title: String,
     authorName: String?,
@@ -58,6 +64,7 @@ struct WatchBook: Codable, Identifiable {
     currentTime: Double
   ) {
     self.id = id
+    self.podcastID = podcastID
     self.sessionID = sessionID
     self.title = title
     self.authorName = authorName
@@ -78,6 +85,7 @@ struct WatchBook: Codable, Identifiable {
     }
 
     self.id = id
+    self.podcastID = dictionary["podcastID"] as? String
     self.sessionID = nil
     self.title = title
     self.authorName = dictionary["author"] as? String

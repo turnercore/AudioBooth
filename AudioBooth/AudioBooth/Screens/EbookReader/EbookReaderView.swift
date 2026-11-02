@@ -6,10 +6,13 @@ struct EbookReaderView: View {
   @ObservedObject var model: Model
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.scenePhase) private var scenePhase
 
   @State private var showControls = false
   @State private var showSettings = false
   @State private var showZoneEditor = false
+  @State private var headerCornerInsets = EdgeInsets()
+  @State private var headerTop: CGFloat = 0
 
   @State var preferredColorScheme: ColorScheme?
 
@@ -24,11 +27,19 @@ struct EbookReaderView: View {
       .onChange(of: showControls) { _, value in
         model.onShowControlsChanged(value)
       }
+      .onChange(of: model.preferences.preferredColorScheme, initial: true) { _, scheme in
+        preferredColorScheme = scheme
+      }
       .onChange(of: colorScheme) { _, _ in
-        if model.preferences.theme == .auto {
+        if scenePhase == .active && model.preferences.theme == .auto {
           model.onPreferencesChanged(model.preferences)
         }
-        preferredColorScheme = model.preferences.theme.colorScheme
+        preferredColorScheme = model.preferences.preferredColorScheme
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active && model.preferences.theme == .auto {
+          model.onPreferencesChanged(model.preferences)
+        }
       }
       .onAppear {
         UIApplication.shared.isIdleTimerDisabled = userPreferences.keepScreenAwakeInPlayer
@@ -68,34 +79,36 @@ struct EbookReaderView: View {
 
   @ToolbarContentBuilder
   private var toolbarContent: some ToolbarContent {
-    ToolbarItem(placement: .topBarLeading) {
-      if showControls, !model.isLoading, model.error == nil, model.supportsSearch {
-        Button {
-          model.onSearchTapped()
-        } label: {
-          Label("Search", systemImage: "magnifyingglass")
-        }
-        .transition(.opacity)
-        .tint(.primary)
-      }
-    }
-
-    ToolbarItem(placement: .topBarTrailing) {
-      if showControls || model.isLoading {
-        Button {
-          dismiss()
-        } label: {
-          Label("Close", systemImage: "xmark")
-        }
-        .transition(.opacity)
-        .tint(.primary)
-      }
-    }
-
-    ToolbarItem(placement: .bottomBar) {
-      if !model.isLoading, model.error == nil, showControls {
-        bottomControlBar
+    if model.cover?.isVisible != true {
+      ToolbarItem(placement: .topBarLeading) {
+        if showControls, !model.isLoading, model.error == nil, model.supportsSearch {
+          Button {
+            model.onSearchTapped()
+          } label: {
+            Label("Search", systemImage: "magnifyingglass")
+          }
+          .transition(.opacity)
           .tint(.primary)
+        }
+      }
+
+      ToolbarItem(placement: .topBarTrailing) {
+        if showControls || model.isLoading {
+          Button {
+            dismiss()
+          } label: {
+            Label("Close", systemImage: "xmark")
+          }
+          .transition(.opacity)
+          .tint(.primary)
+        }
+      }
+
+      ToolbarItem(placement: .bottomBar) {
+        if !model.isLoading, model.error == nil, showControls {
+          bottomControlBar
+            .tint(.primary)
+        }
       }
     }
   }
@@ -115,8 +128,25 @@ struct EbookReaderView: View {
           )
           .padding(.top, 8)
           .transition(.move(edge: .top).combined(with: .opacity))
+        } else if let chapterProgress = model.chapterProgress, model.preferences.showProgressHeader,
+          !showControls, !model.isLoading
+        {
+          ChapterProgressView(model: chapterProgress)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+              proxy.frame(in: .global).minY
+            } action: { top in
+              headerTop = top
+            }
+            .padding(.leading, headerCornerInsets.leading)
+            .padding(.trailing, headerCornerInsets.trailing)
+            .foregroundStyle(model.textColor ?? .primary)
+            .background(model.backgroundColor.ignoresSafeArea(edges: .top))
+            .ignoresHorizontalSafeAreaWhenReservedRegionsAvailable()
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
       }
+      .animation(.easeInOut(duration: 0.2), value: showControls)
       .animation(.easeInOut(duration: 0.25), value: model.catchUpMessage)
       .animation(.easeInOut(duration: 0.25), value: model.readAlong?.status)
       .overlay {
@@ -128,12 +158,17 @@ struct EbookReaderView: View {
         }
       }
       .animation(.easeInOut(duration: 0.2), value: showZoneEditor)
+      .overlay {
+        if let cover = model.cover {
+          EbookCoverView(model: cover)
+        }
+      }
   }
 
   private var contentWithSheets: some View {
     contentWithOverlays
       .sheet(isPresented: $showSettings) {
-        EbookReaderPreferencesView(preferences: model.preferences) {
+        EbookReaderPreferencesView(preferences: model.preferences, hasHinge: model.cover?.hasHinge == true) {
           showSettings = false
           Task {
             try? await Task.sleep(for: .milliseconds(400))
@@ -218,9 +253,22 @@ struct EbookReaderView: View {
       onPencilDoubleTap: { model.onTapRight() },
       onPencilSqueeze: { model.onTapLeft() }
     )
-    .ignoresSafeArea(.all)
+    .padding(.horizontal, closedHingePadding)
+    .background(model.backgroundColor)
+    .background {
+      GeometryReader { proxy in
+        Color.clear
+          .onChange(of: proxy.topCornerInsets(at: headerTop), initial: true) { _, corners in
+            headerCornerInsets = corners
+          }
+          .onChange(of: proxy.size) {
+            model.onReaderSizeChanged()
+          }
+      }
+    }
+    .ignoresSafeArea()
     .simultaneousGesture(
-      SpatialTapGesture()
+      SpatialTapGesture(coordinateSpace: .global)
         .onEnded { value in
           handleTap(at: value.location)
         }
@@ -235,6 +283,11 @@ struct EbookReaderView: View {
         }
       }
     }
+  }
+
+  private var closedHingePadding: CGFloat {
+    guard model.cover?.isHingeClosed == true else { return 0 }
+    return 15 * model.preferences.pageMargins.value
   }
 
   private func handleTap(at point: CGPoint) {
@@ -302,8 +355,25 @@ struct EbookReaderView: View {
     model.preferences.progressDisplay == .page ? model.page : nil
   }
 
+  private var isReadAlongActive: Bool {
+    if model.isFollowingMediaOverlay {
+      return playerManager.isPlaying
+    }
+    return model.readAlong?.status.isActive == true
+  }
+
   @ViewBuilder
   private var readAlongIcon: some View {
+    if model.isFollowingMediaOverlay {
+      Image(systemName: "waveform")
+        .symbolEffect(.variableColor.iterative, options: .repeating, isActive: playerManager.isPlaying)
+    } else {
+      readAlongStatusIcon
+    }
+  }
+
+  @ViewBuilder
+  private var readAlongStatusIcon: some View {
     switch model.readAlong?.status {
     case .preparing:
       ProgressView()
@@ -324,8 +394,8 @@ struct EbookReaderView: View {
     switch status {
     case let .preparing(fraction):
       model.isCatchingUpToNarration
-        ? String(localized: "Getting ready… \(Int(fraction * 100))%")
-        : String(localized: "Preparing Read Along… \(Int(fraction * 100))%")
+        ? String(localized: "Getting ready… \(fraction.formatted(.percent.precision(.fractionLength(0))))")
+        : String(localized: "Preparing Read Along… \(fraction.formatted(.percent.precision(.fractionLength(0))))")
     case .locating:
       model.isCatchingUpToNarration
         ? String(localized: "Finding where the narrator is…")
@@ -393,7 +463,7 @@ struct EbookReaderView: View {
           }
         }
         .frame(maxWidth: .infinity)
-        .tint(model.readAlong?.status.isActive == true ? .accentColor : .primary)
+        .tint(isReadAlongActive ? .accentColor : .primary)
       }
 
       if playerManager.current != nil {
@@ -410,6 +480,17 @@ struct EbookReaderView: View {
       }
     }
     .padding(.vertical, 8)
+  }
+}
+
+extension View {
+  @ViewBuilder
+  fileprivate func ignoresHorizontalSafeAreaWhenReservedRegionsAvailable() -> some View {
+    if #available(iOS 27.1, *) {
+      ignoresSafeArea(edges: .horizontal)
+    } else {
+      self
+    }
   }
 }
 
@@ -471,7 +552,11 @@ extension EbookReaderView {
     var progress: Double
     var page: (current: Int, total: Int)?
     var chapters: EbookChapterPickerSheet.Model?
+    var chapterProgress: ChapterProgressView.Model?
     var preferences: EbookReaderPreferences
+    var backgroundColor: Color
+    var textColor: Color?
+    var cover: EbookCoverView.Model?
     var supportsSettings: Bool
     var search: EbookSearchView.Model?
     var supportsSearch: Bool
@@ -482,6 +567,7 @@ extension EbookReaderView {
     var isCatchingUpToNarration: Bool = false
     var positionSync: PositionSyncSheet.Model?
     var playerSheet: EbookPlayerSheet.Model?
+    var isFollowingMediaOverlay: Bool = false
 
     func onAppear() {}
     func onDisappear() {}
@@ -494,6 +580,7 @@ extension EbookReaderView {
     func onTapRight() {}
     func onAutoScrollPlayPauseTapped() {}
     func onShowControlsChanged(_ isVisible: Bool) {}
+    func onReaderSizeChanged() {}
     func onReadAlongTapped() {}
     func onCatchUpTapped() {}
     func onCatchUpDismissed(_ scope: PositionSyncOffer.Dismissal) {}
@@ -507,6 +594,7 @@ extension EbookReaderView {
       page: (current: Int, total: Int)? = nil,
       chapters: EbookChapterPickerSheet.Model? = nil,
       preferences: EbookReaderPreferences = EbookReaderPreferences(),
+      backgroundColor: Color = .clear,
       supportsSettings: Bool = false,
       search: EbookSearchView.Model? = nil,
       supportsSearch: Bool = false,
@@ -519,6 +607,7 @@ extension EbookReaderView {
       self.page = page
       self.chapters = chapters
       self.preferences = preferences
+      self.backgroundColor = backgroundColor
       self.supportsSettings = supportsSettings
       self.search = search
       self.supportsSearch = supportsSearch

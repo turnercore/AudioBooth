@@ -47,11 +47,13 @@ final class BookPlayerModel: BookPlayer.Model {
   private var volumeObservation: NSKeyValueObservation?
   private var hasPlayedThisSession = false
   private var hasRecordedCompletion = false
+  private var narrationProgressSync: NarrationProgressSync?
 
   init(_ book: Book) {
     self.item = nil
     do {
-      self.mediaProgress = try MediaProgress.getOrCreate(for: book.id, duration: book.duration)
+      let duration = book.duration > 0 ? book.duration : (try? LocalBook.fetch(bookID: book.id))?.duration ?? 0
+      self.mediaProgress = try MediaProgress.getOrCreate(for: book.id, duration: duration)
     } catch {
       fatalError("Failed to create MediaProgress for book \(book.id): \(error)")
     }
@@ -150,7 +152,8 @@ final class BookPlayerModel: BookPlayer.Model {
       id: episode.episodeID,
       title: episode.title,
       author: episode.podcast?.author,
-      coverURL: episode.coverURL,
+      podcastTitle: episode.podcast?.title,
+      coverURL: episode.coverURL(raw: true),
       current: mediaProgress.currentTime,
       duration: mediaProgress.duration
     )
@@ -159,7 +162,7 @@ final class BookPlayerModel: BookPlayer.Model {
       id: episode.episodeID,
       title: episode.title,
       author: episode.podcast?.author,
-      coverURL: episode.coverURL
+      coverURL: episode.coverURL()
     )
 
     super.init(
@@ -208,6 +211,7 @@ final class BookPlayerModel: BookPlayer.Model {
       id: episode.id,
       title: episode.title,
       author: podcastAuthor,
+      podcastTitle: podcastTitle,
       coverURL: coverURL,
       current: mediaProgress.currentTime,
       duration: mediaProgress.duration
@@ -267,17 +271,16 @@ final class BookPlayerModel: BookPlayer.Model {
   }
 
   override func onPlayTapped() {
+    if timer.extendIfNeeded() { return }
     (timer as? TimerPickerSheetViewModel)?.onPlaybackResumeRequested()
 
-    guard let player, !isLoading, !isRecovering else {
+    guard player != nil, !isLoading, !isRecovering else {
       pendingPlay = true
       return
     }
 
-    if mediaProgress.isFinished || mediaProgress.remaining <= 1 {
-      let newTime = max(0, mediaProgress.currentTime - 15)
-      mediaProgress.currentTime = newTime
-      player.seek(to: newTime)
+    if mediaProgress.remaining <= 1 {
+      return
     }
 
     isLoading = true
@@ -328,11 +331,27 @@ final class BookPlayerModel: BookPlayer.Model {
     lastSyncedTime = mediaProgress.currentTime
     player.resume()
 
+    if audioSession.outputVolume == 0 {
+      raiseVolumeOrPause()
+    }
+
     if let timerViewModel = timer as? TimerPickerSheetViewModel {
       timerViewModel.activateAutoTimerIfNeeded()
     }
 
     pendingPlay = false
+  }
+
+  private func raiseVolumeOrPause() {
+    AppLogger.player.info("Playback started with volume at 0, raising system volume")
+    MPVolumeView.setSystemVolume(0.3)
+
+    Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(500))
+      guard let self, self.audioSession.outputVolume == 0 else { return }
+      AppLogger.player.info("Volume still at 0 after raising, pausing playback")
+      self.onPauseTapped()
+    }
   }
 
   override func onSkipForwardTapped(seconds: Double) {
@@ -415,7 +434,11 @@ final class BookPlayerModel: BookPlayer.Model {
   private func refreshPositionSyncOffer() {
     guard #available(iOS 26.0, *) else { return }
 
-    guard positionSyncMessage == nil, positionSyncCheck == nil else { return }
+    guard positionSyncMessage == nil, positionSyncCheck == nil,
+      UIApplication.shared.applicationState == .active
+    else {
+      return
+    }
 
     guard playerManager.reader?.readAlong?.status.isActive != true else {
       AppLogger.readAlong.info("Catch Up: Read Along is running, leaving the narration session alone")
@@ -442,8 +465,19 @@ final class BookPlayerModel: BookPlayer.Model {
     AppLogger.readAlong.info("Catch Up: dismissed, you kept listening from here")
   }
 
+  private func updateNarrationProgress() {
+    if narrationProgressSync == nil, let localBook = item as? LocalBook {
+      narrationProgressSync = NarrationProgressSync(book: localBook, mediaProgress: mediaProgress)
+    }
+    narrationProgressSync?.update()
+  }
+
   private func pendingPositionSyncOffer() -> BookSyncContext? {
-    guard UserPreferences.shared.positionSyncOffers else { return nil }
+    guard UserPreferences.shared.positionSyncOffers,
+      (try? LocalBook.fetch(bookID: id))?.hasImportedNarration != true
+    else {
+      return nil
+    }
 
     guard let ebookProgress = mediaProgress.ebookProgress else {
       AppLogger.readAlong.info("Catch Up: no ebook progress recorded for \(self.id)")
@@ -761,6 +795,8 @@ extension BookPlayerModel {
         AppLogger.player.error("Background session fetch failed: \(error)")
       }
 
+      await resolveMissingDuration()
+
       if player == nil {
         do {
           try setupAudioPlayer()
@@ -780,59 +816,13 @@ extension BookPlayerModel {
     Task {
       let request = ImageRequest(url: coverURL)
       guard let image = try? await ImagePipeline.shared.image(for: request),
-        let uiColor = image.averageColor
+        let palette = image.coverPalette
       else { return }
-      let vibrantColor = image.vibrantColor(contrasting: uiColor)
       withAnimation(.easeIn(duration: 0.5)) {
-        self.backgroundColor = Color(uiColor)
-        self.progressTint = vibrantColor.map(Color.init)
+        self.backgroundColor = Color(palette.background)
+        self.secondaryBackgroundColor = Color(palette.secondary)
+        self.progressTint = palette.accent.map(Color.init)
       }
-    }
-  }
-
-  private func autoDownloadIfNeeded() {
-    guard episodeID == nil else { return }
-
-    let mode = userPreferences.autoDownloadBooks
-
-    guard let item, !item.isDownloaded, mode != .off else { return }
-
-    guard mode.isNetworkAllowed else {
-      AppLogger.player.debug("Auto-download skipped (mode: \(mode.rawValue))")
-      return
-    }
-
-    let delay = userPreferences.autoDownloadDelay
-    if delay == .none, let localBook = item as? LocalBook {
-      AppLogger.player.info("Auto-download starting (mode: \(mode.rawValue))")
-      try? localBook.download()
-    } else {
-      AppLogger.player.info("Auto-download will start after \(delay.displayName) of listening")
-    }
-  }
-
-  private func checkAutoDownloadAfterListening() {
-    guard episodeID == nil else { return }
-
-    let mode = userPreferences.autoDownloadBooks
-    let delay = userPreferences.autoDownloadDelay
-
-    guard let item,
-      !item.isDownloaded,
-      mode != .off,
-      delay != .none,
-      !downloadManager.isDownloading(for: id),
-      let session = sessionManager.current
-    else { return }
-
-    let listeningSeconds = Int(session.timeListening + session.pendingListeningTime)
-    guard listeningSeconds >= delay.rawValue else { return }
-
-    guard mode.isNetworkAllowed else { return }
-
-    AppLogger.player.info("Auto-download starting after \(listeningSeconds)s of listening")
-    if let localBook = item as? LocalBook {
-      try? localBook.download()
     }
   }
 
@@ -893,6 +883,7 @@ extension BookPlayerModel {
 
     chapters = ChapterPickerSheetViewModel(
       itemID: id,
+      podcastID: podcastID,
       chapters: resolvedChapters,
       mediaProgress: mediaProgress,
       player: player
@@ -929,6 +920,10 @@ extension BookPlayerModel {
 
     do {
       if let existingItem = try LocalBook.fetch(bookID: id) {
+        if existingItem.isDownloaded, existingItem.tracks.contains(where: { $0.localPath == nil }) {
+          AppLogger.player.warning("Downloaded files are missing, removing download")
+          downloadManager.deleteDownload(for: id)
+        }
         self.item = existingItem
         AppLogger.player.debug(
           "Found existing progress: \(self.mediaProgress.currentTime)s"
@@ -948,6 +943,30 @@ extension BookPlayerModel {
       }
     } catch {
       AppLogger.player.error("Failed to load local episode: \(error)")
+    }
+  }
+
+  private func resolveMissingDuration() async {
+    guard let session = sessionManager.current,
+      session.tracks.count == 1,
+      let track = session.tracks.first,
+      track.duration <= 0,
+      let url = session.url(for: track),
+      url.isFileURL,
+      let duration = try? await AVURLAsset(url: url).load(.duration).seconds,
+      duration.isFinite,
+      duration > 0
+    else { return }
+
+    AppLogger.player.info("Resolved missing duration from local file: \(duration)s")
+    track.duration = duration
+
+    if let localEpisode = item as? LocalEpisode, localEpisode.duration <= 0 {
+      localEpisode.duration = duration
+    }
+
+    if mediaProgress.duration <= 0 {
+      mediaProgress.duration = duration
     }
   }
 
@@ -973,6 +992,56 @@ extension BookPlayerModel {
     }
 
     AppLogger.player.info("Restored playback position and state after reload")
+  }
+}
+
+extension BookPlayerModel {
+  private func startAutoDownload() {
+    if let localBook = item as? LocalBook {
+      try? localBook.download()
+    } else if let episode = item as? LocalEpisode {
+      downloadManager.startDownload(episode)
+    }
+  }
+
+  private func autoDownloadIfNeeded() {
+    let mode = userPreferences.autoDownloadBooks
+
+    guard let item, !item.isDownloaded, mode != .off else { return }
+
+    guard mode.isNetworkAllowed else {
+      AppLogger.player.debug("Auto-download skipped (mode: \(mode.rawValue))")
+      return
+    }
+
+    let delay = userPreferences.autoDownloadDelay
+    if delay == .none {
+      AppLogger.player.info("Auto-download starting (mode: \(mode.rawValue))")
+      startAutoDownload()
+    } else {
+      AppLogger.player.info("Auto-download will start after \(delay.displayName) of listening")
+    }
+  }
+
+  private func checkAutoDownloadAfterListening() {
+    let mode = userPreferences.autoDownloadBooks
+    let delay = userPreferences.autoDownloadDelay
+
+    guard let item,
+      !item.isDownloaded,
+      mode != .off,
+      delay != .none,
+      !downloadManager.isDownloading(for: id),
+      let session = sessionManager.current
+    else { return }
+
+    let listeningSeconds = Int(session.timeListening + session.pendingListeningTime)
+    guard listeningSeconds >= delay.rawValue else { return }
+
+    guard mode.isNetworkAllowed else { return }
+
+    AppLogger.player.info("Auto-download starting after \(listeningSeconds)s of listening")
+    startAutoDownload()
   }
 }
 
@@ -1006,8 +1075,8 @@ extension BookPlayerModel {
       guard let self else { return }
 
       RunLoop.main.perform {
-        if !self.isPlaying {
-          self.player?.seek(to: self.mediaProgress.currentTime)
+        if !self.isPlaying, let player = self.player, !player.isPositioned(at: self.mediaProgress.currentTime) {
+          player.seek(to: self.mediaProgress.currentTime)
         }
         self.observeMediaProgress()
       }
@@ -1038,7 +1107,7 @@ extension BookPlayerModel {
             self.handlePlaybackStateChange(false)
             self.isLoading = false
             self.recoveryPlaybackStartedAt = nil
-            (self.timer as? TimerPickerSheetViewModel)?.pauseLiveActivity()
+            (self.timer as? TimerPickerSheetViewModel)?.pauseLiveActivityIfNeeded()
           case .buffering:
             self.isLoading = true
             self.recoveryPlaybackStartedAt = nil
@@ -1115,6 +1184,12 @@ extension BookPlayerModel {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] notification in
         self?.handleRouteChange(notification)
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+      .sink { [weak self] _ in
+        self?.positionSyncCheck?.cancel()
       }
       .store(in: &cancellables)
 
@@ -1327,6 +1402,7 @@ extension BookPlayerModel {
         if mediaProgress.duration > 0 {
           mediaProgress.progress = mediaProgress.currentTime / mediaProgress.duration
         }
+        updateNarrationProgress()
         try mediaProgress.save()
 
         syncSessionProgress()

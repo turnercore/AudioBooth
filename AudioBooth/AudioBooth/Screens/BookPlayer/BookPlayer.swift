@@ -82,13 +82,16 @@ struct BookPlayer: View {
           .tint(.primary)
         }
 
-        ToolbarItem(placement: .topBarTrailing) {
-          HStack(spacing: 0) {
-            AirPlayButton()
-              .frame(width: 36, height: 36)
-              .tint(.primary)
-          }
+        #if AUDIOBOOTH_HINGE_SDK
+        if #available(iOS 27.1, *) {
+          airPlayToolbarItem
+            .axisBehavior(.verticalPreferred)
+        } else {
+          airPlayToolbarItem
         }
+        #else
+        airPlayToolbarItem
+        #endif
 
         if #available(iOS 26.0, *) {
           ToolbarSpacer(.fixed, placement: .topBarTrailing)
@@ -248,32 +251,66 @@ struct BookPlayer: View {
     }
   }
 
+  private var airPlayToolbarItem: some ToolbarContent {
+    ToolbarItem(placement: .topBarTrailing) {
+      HStack(spacing: 0) {
+        AirPlayButton()
+          .frame(width: 36, height: 36)
+          .tint(.primary)
+      }
+    }
+  }
+
   @ViewBuilder
   private var playerBackground: some View {
-    let color = model.backgroundColor
-    let dark = Color(white: 0.1)
-    if #available(iOS 18.0, *) {
-      MeshGradient(
-        width: 3,
-        height: 3,
-        points: [
-          [0, 0], [0.5, 0], [1, 0],
-          [0, 0.5], [0.5, 0.5], [1, 0.5],
-          [0, 1], [0.5, 1], [1, 1],
-        ],
-        colors: [
-          color, color.opacity(0.8), dark,
-          color.opacity(0.6), color.opacity(0.4), dark,
-          dark, dark, dark,
-        ]
-      )
-    } else {
-      LinearGradient(
-        colors: [color, dark],
-        startPoint: .top,
-        endPoint: .bottom
-      )
+    switch preferences.playerBackgroundStyle {
+    case .gradient:
+      if #available(iOS 18.0, *) {
+        meshBackground
+      } else {
+        solidBackground
+      }
+    case .solid:
+      solidBackground
+    case .off:
+      Color(white: 0.1)
     }
+  }
+
+  private var solidBackground: some View {
+    model.backgroundColor
+      .overlay {
+        LinearGradient(
+          colors: [.clear, .black.opacity(0.3)],
+          startPoint: .top,
+          endPoint: .bottom
+        )
+      }
+  }
+
+  @available(iOS 18.0, *)
+  private var meshBackground: some View {
+    let color = model.backgroundColor
+    let secondary = model.secondaryBackgroundColor
+    let middle = color.mix(with: secondary, by: 0.5)
+    return MeshGradient(
+      width: 3,
+      height: 3,
+      points: [
+        [0, 0], [0.5, 0], [1, 0],
+        [0, 0.5], [0.5, 0.5], [1, 0.5],
+        [0, 1], [0.5, 1], [1, 1],
+      ],
+      colors: [
+        color, middle, secondary,
+        color.mix(with: .black, by: 0.15),
+        color.mix(with: secondary, by: 0.6).mix(with: .black, by: 0.2),
+        secondary.mix(with: .black, by: 0.3),
+        color.mix(with: .black, by: 0.55),
+        color.mix(with: .black, by: 0.6),
+        middle.mix(with: .black, by: 0.55),
+      ]
+    )
   }
 
   private func portraitLayout(artworkHeight: CGFloat?) -> some View {
@@ -646,6 +683,7 @@ extension BookPlayer {
 
     var downloadState: DownloadManager.DownloadState
     var backgroundColor: Color = .black
+    var secondaryBackgroundColor: Color = .black
     var progressTint: Color?
 
     var isPresented: Bool = true

@@ -1,3 +1,4 @@
+import API
 import Nuke
 import SwiftUI
 import WatchKit
@@ -7,7 +8,7 @@ struct AudioBoothWatch: App {
   @WKApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
   init() {
-    configureImagePipeline()
+    ImagePipeline.shared = .watch(customHeaders: Audiobookshelf.shared.authentication.server?.customHeaders)
     _ = WatchConnectivityManager.shared
     Task { @MainActor in
       WatchFileTransferReceiver.recoverStagedTransfers()
@@ -21,9 +22,13 @@ struct AudioBoothWatch: App {
       ContentView()
     }
   }
+}
 
-  private func configureImagePipeline() {
-    ImagePipeline.shared = ImagePipeline {
+extension ImagePipeline {
+  nonisolated private static let dataCache = try? DataCache(name: "me.jgrenier.audioBS.watch.images")
+
+  nonisolated static func watch(customHeaders: [String: String]?) -> ImagePipeline {
+    ImagePipeline {
       let config = URLSessionConfiguration.default
       config.timeoutIntervalForResource = 300
       config.timeoutIntervalForRequest = 60
@@ -32,9 +37,10 @@ struct AudioBoothWatch: App {
       config.allowsExpensiveNetworkAccess = true
       config.allowsConstrainedNetworkAccess = true
       config.urlCache = nil
+      config.httpAdditionalHeaders = customHeaders
 
       $0.dataLoader = DataLoader(configuration: config)
-      $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.watch.images")
+      $0.dataCache = dataCache
     }
   }
 }

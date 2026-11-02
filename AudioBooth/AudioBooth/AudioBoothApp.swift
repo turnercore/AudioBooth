@@ -45,6 +45,7 @@ struct AudioBoothApp: App {
         SessionManager.shared.syncUnsyncedSessions()
         PodcastAutoQueueManager.shared.refresh()
         KeepOfflineManager.shared.reconcile()
+        KeepOfflineManager.shared.downloadQueuedBooks()
         WatchConnectivityManager.shared.refreshQueuedWatchDownloads()
 
         if let server = Audiobookshelf.shared.authentication.server, server.status != .connected {
@@ -64,6 +65,12 @@ struct AudioBoothApp: App {
     }
     .commands {
       PlaybackCommands()
+    }
+
+    if #available(iOS 26.0, *) {
+      AssistiveAccess {
+        AssistiveAccessView(model: AssistiveAccessViewModel())
+      }
     }
   }
 

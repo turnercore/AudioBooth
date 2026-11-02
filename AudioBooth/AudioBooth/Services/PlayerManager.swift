@@ -91,6 +91,8 @@ final class PlayerManager: ObservableObject, Sendable {
         let currentServerID = Audiobookshelf.shared.libraries.current?.serverID
         if serverID != currentServerID {
           serverID = currentServerID
+          sharedDefaults?.removeObject(forKey: "recentBooks")
+          sharedDefaults?.removeObject(forKey: "listeningStats")
           clearCurrent()
           clearQueue()
         }
@@ -358,7 +360,7 @@ extension PlayerManager: PlayerManagerProtocol {
     }
   }
 
-  private func open(episodeID: String, podcastID: String) async {
+  func open(episodeID: String, podcastID: String) async {
     let request = beginSelection()
     if current?.id == episodeID {
       showFullPlayer()
@@ -430,11 +432,6 @@ extension PlayerManager {
     commandCenter.playCommand.addTarget { [weak self] _ in
       guard let self, let current else { return .commandFailed }
 
-      if AVAudioSession.sharedInstance().outputVolume == 0 {
-        AppLogger.player.info("Play command received with volume at 0, raising system volume")
-        MPVolumeView.setSystemVolume(0.3)
-      }
-
       current.onPlayTapped()
 
       return .success
@@ -444,6 +441,8 @@ extension PlayerManager {
     commandCenter.pauseCommand.addTarget { [weak self] _ in
       guard let self, let current else { return .commandFailed }
 
+      if current.timer.extendIfNeeded() { return .success }
+
       current.onPauseTapped()
 
       return .success
@@ -452,6 +451,8 @@ extension PlayerManager {
     commandCenter.togglePlayPauseCommand.isEnabled = true
     commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
       guard let self, let current else { return .commandFailed }
+
+      if current.timer.extendIfNeeded() { return .success }
 
       current.onTogglePlaybackTapped()
 
@@ -632,9 +633,9 @@ extension PlayerManager {
     playItem(first, autoPlay: true)
   }
 
-  func playNext(autoPlay: Bool = true) {
+  func playNext(autoPlay: Bool = true, isManual: Bool = false) {
     let request = beginSelection()
-    if !queue.isEmpty, userPreferences.autoPlayNextInQueue {
+    if !queue.isEmpty, isManual || userPreferences.autoPlayNextInQueue {
       let nextItem = queue.removeFirst()
       playItem(nextItem, autoPlay: autoPlay)
       return

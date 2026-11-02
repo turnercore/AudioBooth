@@ -11,7 +11,7 @@ final class NowPlayingManager {
   private var info: [String: Any]
   private let id: String
   private let title: String
-  private let author: String?
+  private let artist: String?
   private var artwork: MPMediaItemArtwork?
   private var animatedArtwork: Any?
   private let preferences = UserPreferences.shared
@@ -26,6 +26,7 @@ final class NowPlayingManager {
     id: String,
     title: String,
     author: String?,
+    podcastTitle: String? = nil,
     coverURL: URL?,
     current: TimeInterval,
     duration: TimeInterval
@@ -34,7 +35,7 @@ final class NowPlayingManager {
 
     self.id = id
     self.title = title
-    self.author = author
+    self.artist = podcastTitle ?? author
 
     primeNowPlaying()
 
@@ -42,9 +43,9 @@ final class NowPlayingManager {
     info[MPNowPlayingInfoPropertyExternalUserProfileIdentifier] = Audiobookshelf.shared.authentication.server?.id
 
     info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
-    info[MPMediaItemPropertyMediaType] = MPMediaType.audioBook.rawValue
+    info[MPMediaItemPropertyMediaType] = (podcastTitle != nil ? MPMediaType.podcast : .audioBook).rawValue
     info[MPMediaItemPropertyTitle] = title
-    info[MPMediaItemPropertyArtist] = author
+    info[MPMediaItemPropertyArtist] = artist
 
     info[MPMediaItemPropertyPlaybackDuration] = duration
     info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = current
@@ -152,10 +153,12 @@ final class NowPlayingManager {
     info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = player.rate
     info[MPNowPlayingInfoPropertyPlaybackRate] = player.isPlaying ? player.rate : 0.0
 
-    if !preferences.showFullBookDuration, let chapters, let current = chapters.current {
+    if !preferences.showFullBookDuration, let chapters, let current = chapters.current,
+      chapters.chapters.count > 1
+    {
       info[MPMediaItemPropertyTitle] = decoratedTitle(current.title)
       info[MPMediaItemPropertyArtist] = title
-      info[MPMediaItemPropertyAlbumTitle] = author
+      info[MPMediaItemPropertyAlbumTitle] = artist
       info[MPMediaItemPropertyPlaybackDuration] = current.end - current.start
       info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = chapters.currentElapsedTime(
         currentTime: mediaProgress.currentTime
@@ -163,7 +166,7 @@ final class NowPlayingManager {
       info[MPNowPlayingInfoPropertyExternalContentIdentifier] = "\(id)-\(current.id)"
     } else {
       info[MPMediaItemPropertyTitle] = decoratedTitle(title)
-      info[MPMediaItemPropertyArtist] = author
+      info[MPMediaItemPropertyArtist] = artist
       info[MPMediaItemPropertyAlbumTitle] = nil
       info[MPMediaItemPropertyPlaybackDuration] = mediaProgress.duration
       info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = mediaProgress.currentTime
@@ -189,7 +192,20 @@ final class NowPlayingManager {
 }
 
 extension NowPlayingManager {
-  private static func aspectFilled(image: UIImage, into targetSize: CGSize) -> UIImage {
+  nonisolated private static func aspectFitted(image: UIImage, into targetSize: CGSize) -> UIImage {
+    guard targetSize.width > 0, targetSize.height > 0 else { return image }
+    let scale = min(targetSize.width / image.size.width, targetSize.height / image.size.height)
+    guard scale < 1 else { return image }
+    let scaledSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.opaque = true
+    return UIGraphicsImageRenderer(size: scaledSize, format: format).image { _ in
+      image.draw(in: CGRect(origin: .zero, size: scaledSize))
+    }
+  }
+
+  nonisolated private static func aspectFilled(image: UIImage, into targetSize: CGSize) -> UIImage {
     guard targetSize.width > 0, targetSize.height > 0 else { return image }
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
@@ -213,16 +229,18 @@ extension NowPlayingManager {
 
         artwork = MPMediaItemArtwork(
           boundsSize: image.size,
-          requestHandler: { _ in image }
+          requestHandler: { @Sendable size in
+            Self.aspectFitted(image: image, into: size)
+          }
         )
 
         if #available(iOS 26.0, *) {
           animatedArtwork = MPMediaItemAnimatedArtwork(
             artworkID: "\(id)-\(url.absoluteString)",
-            previewImageRequestHandler: { size in
+            previewImageRequestHandler: { @Sendable size in
               Self.aspectFilled(image: image, into: size)
             },
-            videoAssetFileURLRequestHandler: { _ in
+            videoAssetFileURLRequestHandler: { @Sendable _ in
               nil
             }
           )

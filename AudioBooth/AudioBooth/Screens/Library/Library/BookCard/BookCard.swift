@@ -5,6 +5,7 @@ import SwiftUI
 extension EnvironmentValues {
   @Entry var itemDisplayMode: BookCard.DisplayMode = .card
   @Entry var coverSize: CGFloat? = nil
+  @Entry var episodeCardWidth: CGFloat? = nil
 }
 
 struct BookCard: View {
@@ -31,7 +32,7 @@ struct BookCard: View {
 
   private var navigationDestination: NavigationDestination {
     if let id = model.podcastID {
-      .podcast(id: id, episodeID: model.id)
+      .podcast(id: id, episodeID: model.id == id ? nil : model.id)
     } else {
       .book(id: model.id)
     }
@@ -70,7 +71,7 @@ struct BookListCard: View {
 
   private var navigationDestination: NavigationDestination {
     if let id = model.podcastID {
-      .podcast(id: id, episodeID: model.id)
+      .podcast(id: id, episodeID: model.id == id ? nil : model.id)
     } else {
       .book(id: model.id)
     }

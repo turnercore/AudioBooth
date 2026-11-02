@@ -15,6 +15,8 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   private var pendingLocalSessions: [String: [String: Any]] = [:]
   private var localSessionSyncTask: Task<Bool, Never>?
   private var lastQueuedDownloadsRefresh: Date?
+  private var lastComplicationTransfer: (savedAt: Date, currentTime: Double, rate: Float)?
+  private var rateTransferTask: Task<Void, Never>?
 
   private var syncedLocalSessions: [String: Double] {
     didSet { UserDefaults.standard.set(syncedLocalSessions, forKey: Keys.syncedLocalSessions) }
@@ -23,6 +25,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   private enum Keys {
     static let watchDownloadedBookIDs = "watch_downloaded_book_ids"
     static let watchQueuedBookIDs = "watch_queued_book_ids"
+    static let watchEpisodePodcastIDs = "watch_episode_podcast_ids"
     static let syncedLocalSessions = "synced_local_sessions"
   }
 
@@ -34,6 +37,10 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     didSet { UserDefaults.standard.set(watchQueuedBookIDs, forKey: Keys.watchQueuedBookIDs) }
   }
 
+  private var watchEpisodePodcastIDs: [String: String] {
+    didSet { UserDefaults.standard.set(watchEpisodePodcastIDs, forKey: Keys.watchEpisodePodcastIDs) }
+  }
+
   @Published private(set) var canDownloadToWatch = false
 
   private override init() {
@@ -41,6 +48,8 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
       UserDefaults.standard.dictionary(forKey: Keys.syncedLocalSessions) as? [String: Double] ?? [:]
     watchDownloadedBookIDs = UserDefaults.standard.stringArray(forKey: Keys.watchDownloadedBookIDs) ?? []
     watchQueuedBookIDs = UserDefaults.standard.stringArray(forKey: Keys.watchQueuedBookIDs) ?? []
+    watchEpisodePodcastIDs =
+      UserDefaults.standard.dictionary(forKey: Keys.watchEpisodePodcastIDs) as? [String: String] ?? [:]
     super.init()
 
     context["syncedLocalSessions"] = syncedLocalSessions
@@ -56,7 +65,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     SessionService.deviceID + "-watch"
   }
 
-  func syncProgress(_ bookID: String, chapterProgress: Double? = nil) {
+  func syncProgress(_ bookID: String, chapterProgress: Double? = nil, isPlaying: Bool = false) {
     guard let current = try? MediaProgress.fetch(bookID: bookID) else { return }
 
     var progress = context["progress"] as? [String: Double] ?? [:]
@@ -74,41 +83,52 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
       context.removeValue(forKey: "chapterProgress")
     }
 
+    let wasPlaying = isPhonePlaying
+    context["nowPlaying"] = [
+      "bookID": bookID,
+      "currentTime": current.currentTime,
+      "isPlaying": isPlaying,
+      "savedAt": Date().timeIntervalSince1970,
+    ]
+
     updateContext()
+
+    if wasPlaying != isPlaying {
+      transferComplicationUpdate()
+    } else if isPlaying, needsComplicationRefresh(currentTime: current.currentTime) {
+      transferComplicationUpdate()
+    } else if isPlaying, (context["playbackRate"] as? Float) != lastComplicationTransfer?.rate {
+      scheduleRateTransfer()
+    }
   }
 
-  func syncContinueListening(books: [Book]) {
+  func syncContinueListening(_ entities: Personalized.Section.Entities) {
+    switch entities {
+    case .books(let books):
+      syncContinueListening(books: books)
+    case .episodes(let podcasts):
+      syncContinueListening(episodes: podcasts)
+    default:
+      break
+    }
+  }
+
+  func syncContinueListening(books: [Book] = [], episodes: [Podcast] = []) {
     let allProgress = (try? MediaProgress.fetchAll()) ?? []
     let progressByBookID = Dictionary(
       allProgress.map { ($0.bookID, $0) },
       uniquingKeysWith: { first, _ in first }
     )
 
-    var continueListening: [[String: Any]] = []
+    let items = books.map(watchBookItem) + watchEpisodeItems(episodes)
+    let continueListening = Array(items.prefix(5))
+
     var progress: [String: Double] = [:]
     var progressUpdatedAt: [String: Double] = [:]
-
-    for book in books {
-      continueListening.append([
-        "id": book.id,
-        "title": book.title,
-        "author": book.authorName as Any,
-        "duration": book.duration,
-      ])
-
-      if let mediaProgress = progressByBookID[book.id] {
-        progress[book.id] = mediaProgress.currentTime
-        progressUpdatedAt[book.id] = mediaProgress.lastUpdate.timeIntervalSince1970
-      }
-
-      if continueListening.count >= 5 { break }
-    }
-
-    for bookID in watchDownloadedBookIDs {
-      if let mediaProgress = progressByBookID[bookID] {
-        progress[bookID] = mediaProgress.currentTime
-        progressUpdatedAt[bookID] = mediaProgress.lastUpdate.timeIntervalSince1970
-      }
+    for id in continueListening.compactMap({ $0["id"] as? String }) + watchDownloadedBookIDs {
+      guard let mediaProgress = progressByBookID[id] else { continue }
+      progress[id] = mediaProgress.currentTime
+      progressUpdatedAt[id] = mediaProgress.lastUpdate.timeIntervalSince1970
     }
 
     context["continueListening"] = continueListening
@@ -128,10 +148,8 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
 
         for section in personalized.sections {
           if section.id == "continue-listening" {
-            if case .books(let books) = section.entities {
-              syncContinueListening(books: books)
-              AppLogger.watchConnectivity.info("Refreshed continue listening from server on watch request")
-            }
+            syncContinueListening(section.entities)
+            AppLogger.watchConnectivity.info("Refreshed continue listening from server on watch request")
             break
           }
         }
@@ -201,7 +219,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     }
   }
 
-  private func updateContext() {
+  func updateContext() {
     guard let session, session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else {
       return
     }
@@ -216,14 +234,66 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     }
   }
 
+  private var isPhonePlaying: Bool {
+    (context["nowPlaying"] as? [String: Any])?["isPlaying"] as? Bool ?? false
+  }
+
+  private func needsComplicationRefresh(currentTime: Double) -> Bool {
+    guard let lastComplicationTransfer else { return true }
+
+    let elapsed = Date().timeIntervalSince(lastComplicationTransfer.savedAt)
+    let expectedTime = lastComplicationTransfer.currentTime + elapsed * Double(lastComplicationTransfer.rate)
+    return elapsed > 30 * 60 || abs(currentTime - expectedTime) > 60
+  }
+
+  private func scheduleRateTransfer() {
+    rateTransferTask?.cancel()
+    rateTransferTask = Task {
+      try? await Task.sleep(for: .seconds(2))
+      guard !Task.isCancelled else { return }
+      transferComplicationUpdate()
+    }
+  }
+
+  private func transferComplicationUpdate() {
+    rateTransferTask?.cancel()
+
+    guard let session, session.activationState == .activated, session.isComplicationEnabled else { return }
+
+    var userInfo: [String: Any] = ["command": "complication"]
+    userInfo["nowPlaying"] = context["nowPlaying"]
+    userInfo["currentBook"] = context["currentBook"]
+    userInfo["playbackRate"] = context["playbackRate"]
+    userInfo["progress"] = context["progress"]
+    userInfo["progressUpdatedAt"] = context["progressUpdatedAt"]
+    session.transferCurrentComplicationUserInfo(userInfo)
+
+    if let nowPlaying = context["nowPlaying"] as? [String: Any],
+      let savedAt = nowPlaying["savedAt"] as? Double,
+      let currentTime = nowPlaying["currentTime"] as? Double
+    {
+      lastComplicationTransfer = (
+        savedAt: Date(timeIntervalSince1970: savedAt),
+        currentTime: currentTime,
+        rate: context["playbackRate"] as? Float ?? 1
+      )
+    }
+  }
+
   func syncHomeSections(sections: [Personalized.Section], enabledSections: [HomeSection]) {
     let excludedIDs: Set<String> = ["continue-listening", "continue-reading"]
 
     var bookCountByID: [String: Int] = [:]
     for section in sections {
       guard !excludedIDs.contains(section.id) else { continue }
-      guard case .books(let books) = section.entities, !books.isEmpty else { continue }
-      bookCountByID[section.id] = books.count
+      let count: Int
+      switch section.entities {
+      case .books(let books): count = books.count
+      case .episodes(let podcasts), .podcasts(let podcasts): count = podcasts.count
+      default: continue
+      }
+      guard count > 0 else { continue }
+      bookCountByID[section.id] = count
     }
 
     var sectionMetadata: [[String: Any]] = []
@@ -241,6 +311,8 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   }
 
   func sendPlaybackRate(_ rate: Float?) {
+    let wasPlaying = isPhonePlaying
+
     if let rate {
       context["playbackRate"] = rate
       context["hasCurrentBook"] = true
@@ -249,23 +321,49 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
       context.removeValue(forKey: "hasCurrentBook")
       context.removeValue(forKey: "chapterProgress")
       context.removeValue(forKey: "currentBook")
+
+      if var nowPlaying = context["nowPlaying"] as? [String: Any] {
+        nowPlaying["isPlaying"] = false
+        nowPlaying["savedAt"] = Date().timeIntervalSince1970
+        context["nowPlaying"] = nowPlaying
+      }
     }
 
     updateContext()
+
+    if wasPlaying != isPhonePlaying {
+      transferComplicationUpdate()
+    }
   }
 
-  func sendCurrentBook(id: String, title: String, author: String?, coverURL: URL?, duration: TimeInterval) {
-    context["currentBook"] = [
+  func sendCurrentBook(
+    id: String,
+    title: String,
+    author: String?,
+    coverURL: URL?,
+    duration: TimeInterval,
+    chapterStarts: [Double] = [],
+    chapterTitles: [String] = []
+  ) {
+    let remoteCoverURL =
+      coverURL?.isFileURL == false
+      ? coverURL : Audiobookshelf.shared.authentication.serverURL?.appendingPathComponent("api/items/\(id)/cover")
+
+    var currentBook: [String: Any] = [
       "id": id,
       "title": title,
-      "author": author as Any,
-      "coverURL": watchCompatibleCoverURL(from: coverURL) as Any,
       "duration": duration,
+      "chapterStarts": chapterStarts,
+      "chapterTitles": chapterTitles,
     ]
+    currentBook["author"] = author
+    currentBook["coverURL"] = watchCompatibleCoverURL(from: remoteCoverURL)
+    context["currentBook"] = currentBook
     updateContext()
   }
 
-  func requestWatchDownload(bookID: String) {
+  func requestWatchDownload(bookID: String, podcastID: String? = nil) {
+    watchEpisodePodcastIDs[bookID] = podcastID
     Task {
       await sendDownloadRequest(bookID: bookID, refreshOnly: false)
     }
@@ -306,6 +404,42 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
   private func updateCanDownloadToWatch() {
     guard let session else { return }
     canDownloadToWatch = session.activationState == .activated && session.isPaired && session.isWatchAppInstalled
+  }
+
+  private func watchBookItem(_ book: Book) -> [String: Any] {
+    var item: [String: Any] = [
+      "id": book.id,
+      "title": book.title,
+      "duration": book.duration,
+    ]
+    item["author"] = book.authorName
+    item["coverURL"] = watchCompatibleCoverURL(from: book.coverURL())
+    return item
+  }
+
+  private func watchEpisodeItems(_ podcasts: [Podcast]) -> [[String: Any]] {
+    podcasts.compactMap { podcast in
+      guard let episode = podcast.recentEpisode else { return nil }
+      var item: [String: Any] = [
+        "id": episode.id,
+        "podcastID": podcast.id,
+        "title": episode.title,
+        "author": podcast.title,
+        "duration": episode.duration ?? 0,
+      ]
+      item["coverURL"] = watchCompatibleCoverURL(from: podcast.coverURL())
+      return item
+    }
+  }
+
+  private func watchPodcastItem(_ podcast: Podcast) -> [String: Any] {
+    var item: [String: Any] = [
+      "id": podcast.id,
+      "title": podcast.title,
+    ]
+    item["author"] = podcast.author
+    item["coverURL"] = watchCompatibleCoverURL(from: podcast.coverURL())
+    return item
   }
 
   private func watchCompatibleCoverURL(from url: URL?) -> String? {
@@ -367,12 +501,10 @@ extension WatchConnectivityManager: WCSessionDelegate {
 
     for section in personalized.sections {
       if section.id == "continue-listening" {
-        if case .books(let books) = section.entities {
-          syncContinueListening(books: books)
-          AppLogger.watchConnectivity.info(
-            "Synced cached continue listening to watch on activation"
-          )
-        }
+        syncContinueListening(section.entities)
+        AppLogger.watchConnectivity.info(
+          "Synced cached continue listening to watch on activation"
+        )
         break
       }
     }
@@ -407,7 +539,11 @@ extension WatchConnectivityManager: WCSessionDelegate {
       switch command {
       case "play":
         if let bookID = message["bookID"] as? String {
-          handlePlayCommand(bookID: bookID, currentTime: message["currentTime"] as? Double)
+          handlePlayCommand(
+            bookID: bookID,
+            podcastID: message["podcastID"] as? String,
+            currentTime: message["currentTime"] as? Double
+          )
         } else {
           PlayerManager.shared.current?.onPlayTapped()
         }
@@ -578,6 +714,7 @@ extension WatchConnectivityManager: WCSessionDelegate {
         let forDownload = message["forDownload"] as? Bool ?? false
         await handleStartSession(
           bookID: bookID,
+          podcastID: message["podcastID"] as? String,
           forDownload: forDownload,
           replyHandler: replyHandler
         )
@@ -680,18 +817,27 @@ extension WatchConnectivityManager: WCSessionDelegate {
 
   private func handleStartSession(
     bookID: String,
+    podcastID: String?,
     forDownload: Bool,
     replyHandler: @escaping ([String: Any]) -> Void
   ) async {
+    if forDownload, let podcastID {
+      watchEpisodePodcastIDs[bookID] = podcastID
+    }
+
     do {
-      replyHandler(try await makeSessionPayload(bookID: bookID, forDownload: forDownload))
+      replyHandler(try await makeSessionPayload(bookID: bookID, podcastID: podcastID, forDownload: forDownload))
     } catch {
       AppLogger.watchConnectivity.error("Failed to start session: \(error)")
       replyHandler(["error": error.localizedDescription])
     }
   }
 
-  private func makeSessionPayload(bookID: String, forDownload: Bool) async throws -> [String: Any] {
+  private func makeSessionPayload(
+    bookID: String,
+    podcastID: String?,
+    forDownload: Bool
+  ) async throws -> [String: Any] {
     guard let serverURL = Audiobookshelf.shared.authentication.serverURL else {
       throw NSError(
         domain: "WatchConnectivity",
@@ -700,33 +846,72 @@ extension WatchConnectivityManager: WCSessionDelegate {
       )
     }
 
-    let book: Book
+    let itemID = podcastID ?? bookID
+    let libraryItem: PlaySession.LibraryItem
     let sessionID: String?
-    let audioTracks: [AudioTrack]
+    let sessionTracks: [AudioTrack]?
+    let sessionCurrentTime: Double?
 
     if forDownload {
-      book = try await Audiobookshelf.shared.books.fetch(id: bookID)
+      if let podcastID {
+        libraryItem = .podcast(try await Audiobookshelf.shared.podcasts.fetch(id: podcastID))
+      } else {
+        libraryItem = .book(try await Audiobookshelf.shared.books.fetch(id: bookID))
+      }
       sessionID = nil
-      audioTracks = book.tracks ?? []
+      sessionTracks = nil
+      sessionCurrentTime = nil
     } else {
       let playSession = try await Audiobookshelf.shared.sessions.start(
-        itemID: bookID,
+        itemID: itemID,
+        episodeID: podcastID == nil ? nil : bookID,
         forceTranscode: true,
         sessionType: .watch,
         timeout: 30
       )
-      switch playSession.libraryItem {
-      case .book(let b): book = b
-      case .podcast: throw NSError(domain: "WatchConnectivity", code: -1)
-      }
+      libraryItem = playSession.libraryItem
       sessionID = playSession.id
-      audioTracks = playSession.audioTracks ?? []
+      sessionTracks = playSession.audioTracks
+      sessionCurrentTime = playSession.currentTime
     }
 
-    let tracks: [[String: Any]] = audioTracks.map { audioTrack in
+    var payload: [String: Any]
+    let itemTracks: [AudioTrack]
+
+    switch libraryItem {
+    case .book(let book):
+      itemTracks = book.tracks ?? []
+      payload = [
+        "title": book.title,
+        "authorName": book.authorName ?? "",
+        "coverURL": watchCompatibleCoverURL(from: book.coverURL()) ?? "",
+        "duration": book.duration,
+        "chapters": watchChapters(book.chapters?.map { ($0.title, $0.start, $0.end) }),
+      ]
+    case .podcast(let podcast):
+      guard let episode = podcast.media.episodes?.first(where: { $0.id == bookID }) else {
+        throw NSError(
+          domain: "WatchConnectivity",
+          code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Episode not found"]
+        )
+      }
+      itemTracks = episode.audioTrack.map { [$0] } ?? []
+      payload = [
+        "podcastID": podcast.id,
+        "title": episode.title,
+        "authorName": podcast.title,
+        "coverURL": watchCompatibleCoverURL(from: podcast.coverURL()) ?? "",
+        "duration": episode.duration ?? 0,
+        "chapters": watchChapters(episode.chapters?.map { ($0.title, $0.start, $0.end) }),
+      ]
+    }
+
+    // Personal hardening: never embed server credentials in URLs sent to the watch.
+    let tracks: [[String: Any]] = (sessionTracks ?? itemTracks).map { audioTrack in
       let trackURL: String
       if forDownload, let ino = audioTrack.ino {
-        let url = serverURL.appendingPathComponent("api/items/\(bookID)/file/\(ino)/download")
+        let url = serverURL.appendingPathComponent("api/items/\(itemID)/file/\(ino)/download")
         trackURL = url.absoluteString
       } else if let sessionID = sessionID {
         let baseURLString = serverURL.absoluteString.trimmingCharacters(
@@ -747,16 +932,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
       ]
     }
 
-    let chapters: [[String: Any]] =
-      book.chapters?.enumerated().map { index, chapter in
-        [
-          "id": index,
-          "title": chapter.title,
-          "start": chapter.start,
-          "end": chapter.end,
-        ]
-      } ?? []
-
     if let sessionID = sessionID {
       AppLogger.watchConnectivity.info(
         "Created session \(sessionID) for book \(bookID), forDownload=\(forDownload)"
@@ -767,18 +942,22 @@ extension WatchConnectivityManager: WCSessionDelegate {
       )
     }
 
-    let coverURLString = watchCompatibleCoverURL(from: book.coverURL())
+    payload["id"] = bookID
+    payload["sessionID"] = sessionID ?? ""
+    payload["currentTime"] = sessionCurrentTime
+    payload["tracks"] = tracks
+    return payload
+  }
 
-    return [
-      "id": bookID,
-      "sessionID": sessionID ?? "",
-      "title": book.title,
-      "authorName": book.authorName ?? "",
-      "coverURL": coverURLString ?? "",
-      "duration": book.duration,
-      "tracks": tracks,
-      "chapters": chapters,
-    ]
+  private func watchChapters(_ chapters: [(title: String, start: Double, end: Double)]?) -> [[String: Any]] {
+    (chapters ?? []).enumerated().map { index, chapter in
+      [
+        "id": index,
+        "title": chapter.title,
+        "start": chapter.start,
+        "end": chapter.end,
+      ]
+    }
   }
 
   private func handleFetchSectionBooks(
@@ -793,23 +972,16 @@ extension WatchConnectivityManager: WCSessionDelegate {
         personalized = try await Audiobookshelf.shared.libraries.fetchPersonalized()
       }
 
-      guard let section = personalized.sections.first(where: { $0.id == sectionID }),
-        case .books(let books) = section.entities
-      else {
+      switch personalized.sections.first(where: { $0.id == sectionID })?.entities {
+      case .books(let books):
+        replyHandler(["books": books.map(watchBookItem)])
+      case .episodes(let podcasts):
+        replyHandler(["books": watchEpisodeItems(podcasts)])
+      case .podcasts(let podcasts):
+        replyHandler(["podcasts": podcasts.map(watchPodcastItem)])
+      default:
         replyHandler(["error": "Section not found"])
-        return
       }
-
-      let bookDicts: [[String: Any]] = books.map { book in
-        [
-          "id": book.id,
-          "title": book.title,
-          "author": book.authorName as Any,
-          "duration": book.duration,
-        ]
-      }
-
-      replyHandler(["books": bookDicts])
     } catch {
       AppLogger.watchConnectivity.error("Failed to fetch section books: \(error)")
       replyHandler(["error": error.localizedDescription])
@@ -949,10 +1121,14 @@ extension WatchConnectivityManager: WCSessionDelegate {
         let updatedAt = dict["updatedAt"] as? Double
       else { continue }
 
+      let podcastID = dict["podcastID"] as? String
+
       sessionSyncs.append(
         SessionSync(
           id: id,
-          libraryItemId: bookID,
+          libraryItemId: podcastID ?? bookID,
+          episodeId: podcastID == nil ? nil : bookID,
+          mediaType: podcastID == nil ? "book" : "podcast",
           duration: duration,
           startTime: startTime,
           currentTime: currentTime,
@@ -961,7 +1137,8 @@ extension WatchConnectivityManager: WCSessionDelegate {
           updatedAt: Int(updatedAt * 1000),
           deviceInfo: SessionSync.DeviceInfo(
             deviceID: Self.watchDeviceID,
-            clientName: "AudioBooth Watch"
+            clientName: "AudioBooth Watch",
+            model: nil
           )
         )
       )
@@ -1020,16 +1197,13 @@ extension WatchConnectivityManager: WCSessionDelegate {
     }
   }
 
-  private func handlePlayCommand(bookID: String, currentTime: Double? = nil) {
+  private func handlePlayCommand(bookID: String, podcastID: String?, currentTime: Double? = nil) {
     Task { @MainActor in
       do {
-        if let book = try LocalBook.fetch(bookID: bookID) {
+        if let podcastID {
+          await PlayerManager.shared.open(episodeID: bookID, podcastID: podcastID)
+        } else if let book = try LocalBook.fetch(bookID: bookID) {
           PlayerManager.shared.setCurrent(book)
-          if let currentTime, let player = PlayerManager.shared.current as? BookPlayerModel {
-            player.seekToTime(currentTime)
-          }
-          PlayerManager.shared.current?.onPlayTapped()
-          PlayerManager.shared.showFullPlayer()
         } else {
           AppLogger.watchConnectivity.info("Book not found locally, fetching from server...")
           let session = try await Audiobookshelf.shared.sessions.start(
@@ -1041,12 +1215,15 @@ extension WatchConnectivityManager: WCSessionDelegate {
           if case .book(let book) = session.libraryItem {
             PlayerManager.shared.setCurrent(book)
           }
-          if let currentTime, let player = PlayerManager.shared.current as? BookPlayerModel {
-            player.seekToTime(currentTime)
-          }
-          PlayerManager.shared.current?.onPlayTapped()
-          PlayerManager.shared.showFullPlayer()
         }
+
+        guard let current = PlayerManager.shared.current, current.id == bookID else { return }
+
+        if let currentTime, let player = current as? BookPlayerModel {
+          player.seekToTime(currentTime)
+        }
+        current.onPlayTapped()
+        PlayerManager.shared.showFullPlayer()
       } catch {
         AppLogger.watchConnectivity.error(
           "Failed to handle play command: \(error)"

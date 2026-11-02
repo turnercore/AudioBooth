@@ -82,9 +82,9 @@ final class StorageManager {
 
     AppLogger.download.info("Cleaning up downloads unused since \(cutoffDate)")
 
-    let staleBookIDs = await MainActor.run {
+    let stale = await MainActor.run {
       let servers = Audiobookshelf.shared.authentication.servers
-      var result: [String] = []
+      var result: (books: [String], episodes: [(episodeID: String, podcastID: String)]) = ([], [])
 
       for server in servers.values {
         do {
@@ -105,7 +105,21 @@ final class StorageManager {
 
             if lastUsed < cutoffDate {
               AppLogger.download.info("Removing unused download: \(book.title) (last used: \(lastUsed))")
-              result.append(book.bookID)
+              result.books.append(book.bookID)
+            }
+          }
+
+          let downloadedEpisodes = try context.fetch(FetchDescriptor<LocalEpisode>()).filter(\.isDownloaded)
+
+          for episode in downloadedEpisodes {
+            guard episode.episodeID != currentlyPlaying, let podcastID = episode.podcast?.podcastID else { continue }
+
+            let lastUsed =
+              progressByBookID[episode.episodeID]?.lastPlayedAt ?? episode.downloadedAt ?? episode.createdAt
+
+            if lastUsed < cutoffDate {
+              AppLogger.download.info("Removing unused episode download: \(episode.title) (last used: \(lastUsed))")
+              result.episodes.append((episode.episodeID, podcastID))
             }
           }
         } catch {
@@ -115,8 +129,12 @@ final class StorageManager {
       return result
     }
 
-    for bookID in staleBookIDs {
+    for bookID in stale.books {
       DownloadManager.shared.deleteDownload(for: bookID)
+    }
+
+    for episode in stale.episodes {
+      DownloadManager.shared.deleteEpisodeDownload(episodeID: episode.episodeID, podcastID: episode.podcastID)
     }
   }
 

@@ -51,10 +51,16 @@ struct ContentView: View {
       .observesHinge()
       .fullScreenCover(isPresented: $playerManager.isShowingFullPlayer) {
         if let currentPlayer = playerManager.current {
-          BookPlayer(model: currentPlayer)
-            .displayScaled()
-            .playerZoomTransition(in: playerNamespace)
-            .interactiveDismissDisabled(currentPlayer.isLocked)
+          if preferences.assistedPlayer {
+            AssistedPlayer(model: currentPlayer)
+              .displayScaled()
+              .interactiveDismissDisabled()
+          } else {
+            BookPlayer(model: currentPlayer)
+              .displayScaled()
+              .zoomTransition(sourceID: "player", in: playerNamespace)
+              .interactiveDismissDisabled(currentPlayer.isLocked)
+          }
         }
       }
       .fullScreenCover(item: $playerManager.reader) { reader in
@@ -77,6 +83,36 @@ struct ContentView: View {
         PlayerQueueView(model: PlayerQueueViewModel())
           .displayScaled()
       }
+      .adaptiveSheet(
+        isPresented: miniPlayerBinding(
+          get: { $0.speed.isPresented },
+          set: { $0.speed.isPresented = $1 }
+        )
+      ) {
+        if let currentPlayer = playerManager.current {
+          FloatPickerSheet(
+            model: Binding(
+              get: { currentPlayer.speed },
+              set: { currentPlayer.speed = $0 }
+            )
+          )
+        }
+      }
+      .adaptiveSheet(
+        isPresented: miniPlayerBinding(
+          get: { $0.timer.isPresented },
+          set: { $0.timer.isPresented = $1 }
+        )
+      ) {
+        if let currentPlayer = playerManager.current {
+          TimerPickerSheet(
+            model: Binding(
+              get: { currentPlayer.timer },
+              set: { currentPlayer.timer = $0 }
+            )
+          )
+        }
+      }
       .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
         isKeyboardVisible = true
       }
@@ -89,6 +125,22 @@ struct ContentView: View {
           playerManager.showFullPlayer()
         }
       }
+  }
+
+  private func miniPlayerBinding(
+    get: @escaping (BookPlayer.Model) -> Bool,
+    set: @escaping (BookPlayer.Model, Bool) -> Void
+  ) -> Binding<Bool> {
+    Binding(
+      get: {
+        guard let current = playerManager.current, !playerManager.isShowingFullPlayer else { return false }
+        return get(current)
+      },
+      set: { newValue in
+        guard let current = playerManager.current else { return }
+        set(current, newValue)
+      }
+    )
   }
 
   @ViewBuilder
@@ -143,6 +195,7 @@ struct ContentView: View {
         if let currentPlayer = playerManager.current {
           MiniBookPlayer(player: currentPlayer, namespace: playerNamespace)
             .equatable()
+            .id(currentPlayer.id)
         } else {
           HStack(spacing: 12) {
             Image(systemName: "book.circle")

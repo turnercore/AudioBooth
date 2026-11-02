@@ -7,6 +7,34 @@ struct PlaybackDisplayPreferencesView: View {
   var body: some View {
     Form {
       Section {
+        Picker(selection: $preferences.playerBackgroundStyle) {
+          ForEach(PlayerBackgroundStyle.allCases, id: \.self) { style in
+            Text(style.displayText).tag(style)
+          }
+        } label: {
+          PreferenceRow(
+            systemImage: "rectangle.fill",
+            tint: .indigo,
+            title: "Player Background",
+            subtitle: "Color the player with the book cover"
+          )
+        }
+        .listRowBackground(theme.colors.background.card)
+
+        Toggle(isOn: $preferences.coverColorProgressBar) {
+          PreferenceRow(
+            systemImage: "paintpalette",
+            tint: .pink,
+            title: "Cover Color Progress Bar",
+            subtitle: "Tint the progress bar with the book cover color"
+          )
+        }
+        .listRowBackground(theme.colors.background.card)
+      } header: {
+        Text("Cover Colors")
+      }
+
+      Section {
         Toggle(isOn: $preferences.showFullBookDuration) {
           PreferenceRow(
             systemImage: "clock",
@@ -26,28 +54,32 @@ struct PlaybackDisplayPreferencesView: View {
           )
         }
         .listRowBackground(theme.colors.background.card)
+      } header: {
+        Text("Time & Progress")
+      }
 
+      Section {
         Toggle(isOn: $preferences.hideChapterSkipButtons) {
           PreferenceRow(
             systemImage: "eye.slash",
             tint: .purple,
             title: "Hide Chapter Skip Buttons",
-            subtitle: "Cleaner player UI"
+            subtitle: "Simpler player UI"
           )
         }
         .listRowBackground(theme.colors.background.card)
 
-        Toggle(isOn: $preferences.coverColorProgressBar) {
+        Toggle(isOn: $preferences.showSystemVolumeSlider) {
           PreferenceRow(
-            systemImage: "paintpalette",
-            tint: .pink,
-            title: "Cover Color Progress Bar",
-            subtitle: "Tint the progress bar with the book cover color"
+            systemImage: "speaker.wave.2",
+            tint: .green,
+            title: "System Volume Slider",
+            subtitle: "Show device volume under playback controls"
           )
         }
         .listRowBackground(theme.colors.background.card)
       } header: {
-        Text("Time & Progress")
+        Text("Controls")
       }
 
       Section {

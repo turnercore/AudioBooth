@@ -19,10 +19,15 @@ extension EbookReaderViewModel {
   private static let decorationChecksAwaitingClear = 20
   private static let secondsBetweenDecorationAudits: TimeInterval = 2
   private static let maximumSecondsSuspendedBeforeRestarting: TimeInterval = 300
+  private static let secondsBetweenSessionChecks: TimeInterval = 0.25
+  private static let sessionChecksBeforeReadAlong = 40
 
   var isReadAlongSupported: Bool {
+    if let bookID, (try? LocalBook.fetch(bookID: bookID))?.hasImportedNarration == true {
+      return mediaOverlayLoad != nil
+    }
     guard #available(iOS 26.0, *), SpeechTranscriber.isAvailable else { return false }
-    return navigator is DecorableNavigator && matchingSession() != nil
+    return navigator is DecorableNavigator && hasAudiobook
   }
 
   func catchUpToNarration() {
@@ -40,14 +45,42 @@ extension EbookReaderViewModel {
     isCatchingUpToNarration = false
 
     guard let readAlong else {
-      startReadAlong()
+      if matchingSession() == nil {
+        Task { await playAudiobookForReadAlong() }
+      } else {
+        startReadAlong()
+      }
       return
     }
     readAlong.toggle()
   }
 
+  private func playAudiobookForReadAlong() async {
+    guard let bookID,
+      let localBook = try? LocalBook.fetch(bookID: bookID),
+      NarrationSource(downloaded: localBook.tracks) != nil
+    else {
+      Toast(error: String(localized: "Download this audiobook to use Read Along.")).show()
+      return
+    }
+
+    if PlayerManager.shared.current?.id != bookID {
+      PlayerManager.shared.setCurrent(localBook)
+    }
+    PlayerManager.shared.play()
+
+    var checks = 0
+    while matchingSession() == nil, checks < Self.sessionChecksBeforeReadAlong {
+      try? await Task.sleep(for: .seconds(Self.secondsBetweenSessionChecks))
+      checks += 1
+    }
+
+    guard readAlong == nil else { return }
+    startReadAlong()
+  }
+
   func suspendReadAlong() {
-    guard readAlong != nil, readerSuspendedAt == nil else { return }
+    guard readAlong != nil || isFollowingMediaOverlay, readerSuspendedAt == nil else { return }
 
     readerSuspendedAt = Date()
     cancelReadAlongNavigation()
@@ -60,7 +93,12 @@ extension EbookReaderViewModel {
     guard let suspendedAt = readerSuspendedAt else { return }
 
     readerSuspendedAt = nil
-    lastDecoratedHREF = nil
+    lastLeadingDecorationKey = nil
+
+    if isFollowingMediaOverlay {
+      mediaOverlayClipIndex = nil
+      return
+    }
 
     guard let readAlong, !isCatchingUpToNarration else { return }
 
@@ -86,7 +124,7 @@ extension EbookReaderViewModel {
     readAlongDecorationTask = nil
     pendingReadAlongDecorations = nil
     lastReadAlongDecorationAt = nil
-    lastDecoratedHREF = nil
+    lastLeadingDecorationKey = nil
     lastDecorationAuditAt = nil
     cancelReadAlongNavigation()
     (navigator as? DecorableNavigator)?.apply(decorations: [], in: Self.readAlongDecorationGroup)
@@ -169,7 +207,7 @@ extension EbookReaderViewModel {
     Haptics.impact(.medium)
   }
 
-  private func matchingSession() -> PlaybackSession? {
+  func matchingSession() -> PlaybackSession? {
     guard let bookID,
       PlayerManager.shared.current?.id == bookID,
       let session = SessionManager.shared.current,
@@ -194,10 +232,12 @@ extension EbookReaderViewModel {
     applyReadAlongDecorations(sentence: sentence, word: word)
   }
 
-  private func applyReadAlongDecorations(sentence: Locator?, word: Locator?) {
+  func applyReadAlongDecorations(sentence: Locator?, word: Locator?) {
     pendingReadAlongDecorations = [
-      sentence.map {
-        Decoration(id: Self.sentenceDecorationID, locator: $0, style: .highlight(tint: .systemYellow))
+      sentence.flatMap { sentence in
+        preferences.readAlongHighlightsSentence
+          ? Decoration(id: Self.sentenceDecorationID, locator: sentence, style: .highlight(tint: .systemYellow))
+          : nil
       },
       word.map {
         Decoration(id: Self.wordDecorationID, locator: $0, style: .underline(tint: .tintColor))
@@ -232,10 +272,10 @@ extension EbookReaderViewModel {
   private func applyDecorations(_ decorations: [Decoration]) async {
     guard let decorable = navigator as? DecorableNavigator else { return }
 
-    let href = decorations.first?.locator.href.string
-    if href != lastDecoratedHREF {
+    let leading = decorations.first.map { "\($0.id) \($0.locator.href.string)" }
+    if leading != lastLeadingDecorationKey {
       await clearDecorations(using: decorable)
-      lastDecoratedHREF = href
+      lastLeadingDecorationKey = leading
     }
 
     decorable.apply(decorations: decorations, in: Self.readAlongDecorationGroup)
@@ -283,7 +323,7 @@ extension EbookReaderViewModel {
     return (value as? NSNumber)?.intValue
   }
 
-  private func followNarration(sentence: Locator, word: Locator?) {
+  func followNarration(sentence: Locator, word: Locator?) {
     guard navigator != nil else {
       readAlong?.narrationDidLand()
       return

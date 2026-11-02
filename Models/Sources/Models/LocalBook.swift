@@ -184,6 +184,9 @@ extension LocalBook {
       return
     }
 
+    let hasImportedNarration = existingItem.hasImportedNarration
+    let keepsImportedNarration = hasImportedNarration && tracks.isEmpty
+
     if #unavailable(iOS 18, watchOS 11, tvOS 18, macOS 15) {
       bookID = UUID().uuidString
       context.insert(self)
@@ -198,8 +201,10 @@ extension LocalBook {
       existingItem.coverFile = nil
     }
     existingItem.coverURL = coverURL
-    existingItem.duration = duration
-    existingItem.chapters = chapters
+    if !keepsImportedNarration {
+      existingItem.duration = duration
+      existingItem.chapters = chapters
+    }
     existingItem.publishedYear = publishedYear
     existingItem.subtitle = subtitle
     existingItem.bookDescription = bookDescription
@@ -213,7 +218,12 @@ extension LocalBook {
     existingItem.ebookFile = ebookFile ?? existingItem.ebookFile
     existingItem.coverFile = coverFile ?? existingItem.coverFile
 
-    if existingItem.tracks.allSatisfy({ $0.relativePath == nil }) {
+    if hasImportedNarration, !tracks.isEmpty {
+      if let directory = existingItem.tracks.first?.localPath?.deletingLastPathComponent() {
+        try? FileManager.default.removeItem(at: directory)
+      }
+      existingItem.tracks = tracks
+    } else if existingItem.tracks.allSatisfy({ $0.relativePath == nil }) {
       existingItem.tracks = tracks
     }
 
@@ -246,6 +256,10 @@ extension LocalBook {
 
   public var orderedTracks: [Track] {
     tracks.sorted(by: { $0.index < $1.index })
+  }
+
+  public var hasImportedNarration: Bool {
+    tracks.contains { $0.relativePath?.pathComponents.contains("narration") == true }
   }
 
   public var isDownloaded: Bool {

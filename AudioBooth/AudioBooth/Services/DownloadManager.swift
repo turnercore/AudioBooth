@@ -35,6 +35,10 @@ final class DownloadManager: NSObject, ObservableObject {
     "\(serverID)/ebooks/\(bookID)"
   }
 
+  nonisolated static func narrationPath(serverID: String, bookID: String) -> String {
+    "\(serverID)/narration/\(bookID)"
+  }
+
   nonisolated static func episodePath(serverID: String, podcastID: String, episodeID: String) -> String {
     "\(serverID)/episodes/\(podcastID)/\(episodeID)"
   }
@@ -49,6 +53,10 @@ final class DownloadManager: NSObject, ObservableObject {
 
   nonisolated static func ebookDirectory(serverID: String, bookID: String) -> URL {
     appGroupContainer.appendingPathComponent(ebookPath(serverID: serverID, bookID: bookID))
+  }
+
+  nonisolated static func narrationDirectory(serverID: String, bookID: String) -> URL {
+    appGroupContainer.appendingPathComponent(narrationPath(serverID: serverID, bookID: bookID))
   }
 
   nonisolated static func episodeDirectory(serverID: String, podcastID: String, episodeID: String) -> URL {
@@ -715,6 +723,7 @@ final class DownloadManager: NSObject, ObservableObject {
           await LocalPlaybackTimelineReconciler.reconcile(book: book)
         }
       }
+      NarrationImporter.shared.importIfNeeded(bookID: itemID)
     } else if let request, currentKind == kind {
       request.failureCount += 1
       try? request.save()
@@ -1178,6 +1187,7 @@ extension DownloadManager {
       directories: [
         Self.audiobookDirectory(serverID: serverID, bookID: bookID),
         Self.ebookDirectory(serverID: serverID, bookID: bookID),
+        Self.narrationDirectory(serverID: serverID, bookID: bookID),
       ]
     )
 
@@ -1187,6 +1197,7 @@ extension DownloadManager {
       if PlayerManager.shared.current?.id == bookID {
         clearDownloadedPaths(of: book)
       } else {
+        NarrationImporter.shared.removeNarration(from: book)
         try? book.delete()
       }
     }
@@ -1212,6 +1223,7 @@ extension DownloadManager {
     }
 
     if let book = try? LocalBook.fetch(bookID: bookID) {
+      NarrationImporter.shared.removeNarration(from: book)
       book.ebookFile = nil
       if book.localCoverURL == nil {
         book.coverFile = nil
@@ -1250,6 +1262,7 @@ extension DownloadManager {
   }
 
   private func clearDownloadedPaths(of book: LocalBook) {
+    NarrationImporter.shared.removeNarration(from: book)
     for track in book.tracks {
       track.relativePath = nil
     }
@@ -1344,7 +1357,7 @@ extension DownloadManager {
     return ServerContext(serverID: server.id, serverURL: serverURL, credentials: credentials)
   }
 
-  private func authorizedRequest(url: URL, credentials: Credentials) -> URLRequest {
+  func authorizedRequest(url: URL, credentials: Credentials) -> URLRequest {
     var request = URLRequest(url: url)
     request.setValue(credentials.bearer, forHTTPHeaderField: "Authorization")
     if let customHeaders = Audiobookshelf.shared.authentication.server?.customHeaders {
@@ -1355,7 +1368,7 @@ extension DownloadManager {
     return request
   }
 
-  private func prepareDownloadDirectory(_ url: URL) throws {
+  func prepareDownloadDirectory(_ url: URL) throws {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
 
     var parent = url.deletingLastPathComponent()
@@ -1364,7 +1377,7 @@ extension DownloadManager {
     try? parent.setResourceValues(values)
   }
 
-  private func hasEnoughSpace(for bytes: Int64) -> Bool {
+  func hasEnoughSpace(for bytes: Int64) -> Bool {
     let values = try? Self.appGroupContainer.resourceValues(
       forKeys: [.volumeAvailableCapacityForImportantUsageKey]
     )

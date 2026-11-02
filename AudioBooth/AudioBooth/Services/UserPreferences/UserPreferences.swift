@@ -100,6 +100,12 @@ final class UserPreferences: ObservableObject {
   @AppStorage("coverColorProgressBar")
   var coverColorProgressBar: Bool = true
 
+  @AppStorage("playerBackgroundStyle")
+  var playerBackgroundStyle: PlayerBackgroundStyle = .solid
+
+  @AppStorage("showSystemVolumeSlider")
+  var showSystemVolumeSlider: Bool = false
+
   @AppStorage("keepScreenAwakeInPlayer")
   var keepScreenAwakeInPlayer: Bool = false
 
@@ -151,11 +157,20 @@ final class UserPreferences: ObservableObject {
   @AppStorage("offlineSortOrder")
   var offlineSortOrder: OfflineListView.Model.SortOrder = .manual
 
+  @AppStorage("offlineSortAscending")
+  var offlineSortAscending: Bool = true
+
   @AppStorage("librarySortBy")
   var librarySortBy: SortBy = .title
 
   @AppStorage("librarySortAscending")
   var librarySortAscending: Bool = true
+
+  @AppStorage("bookmarkSortBy")
+  var bookmarkSortBy: BookmarkViewerSheet.Model.SortBy = .time
+
+  @AppStorage("bookmarkSortAscending")
+  var bookmarkSortAscending: Bool = true
 
   @AppStorage("libraryFilter")
   var libraryFilter: FilterPicker.Model.Filter = .all
@@ -244,6 +259,9 @@ final class UserPreferences: ObservableObject {
   @AppStorage("openPlayerOnLaunch")
   var openPlayerOnLaunch: Bool = false
 
+  @AppStorage("assistedPlayer")
+  var assistedPlayer: Bool = false
+
   @AppStorage("hapticsEnabled")
   var hapticsEnabled: Bool = true
 
@@ -271,6 +289,7 @@ final class UserPreferences: ObservableObject {
     migrateAutoTimerDuration()
     migrateVolumeBoost()
     migrateSmartContinuePlayback()
+    migrateOfflineSortOrder()
     setupCloudSync()
   }
 
@@ -316,6 +335,19 @@ final class UserPreferences: ObservableObject {
     continueNextInSeries = wasEnabled
     continueNextDownloadedBook = wasEnabled
     continueNextPodcastEpisode = wasEnabled
+  }
+
+  private func migrateOfflineSortOrder() {
+    switch UserDefaults.standard.string(forKey: "offlineSortOrder") {
+    case "newest":
+      offlineSortOrder = .downloadDate
+      offlineSortAscending = false
+    case "oldest":
+      offlineSortOrder = .downloadDate
+      offlineSortAscending = true
+    default:
+      break
+    }
   }
 
   private func migrateVolumeBoost() {
@@ -548,6 +580,20 @@ enum PlayerOrientation: String, CaseIterable {
   }
 }
 
+enum PlayerBackgroundStyle: String, CaseIterable {
+  case gradient
+  case solid
+  case off
+
+  var displayText: LocalizedStringResource {
+    switch self {
+    case .gradient: "Gradient"
+    case .solid: "Solid"
+    case .off: "Off"
+    }
+  }
+}
+
 enum ColorSchemeMode: String, CaseIterable {
   case auto
   case light
@@ -578,7 +624,7 @@ struct EqualizerSettings: Equatable, RawRepresentable {
   init(
     isEnabled: Bool = false,
     preamp: Float = 0,
-    bandGains: [Float] = [Float](repeating: 0, count: 6)
+    bandGains: [Float] = [Float](repeating: 0, count: 7)
   ) {
     self.isEnabled = isEnabled
     self.preamp = preamp
@@ -590,8 +636,10 @@ struct EqualizerSettings: Equatable, RawRepresentable {
     guard parts.count == 3 else { return nil }
     self.isEnabled = parts[0] == "1"
     self.preamp = Float(parts[1]) ?? 0
-    self.bandGains = parts[2].components(separatedBy: ",").compactMap { Float($0) }
-    guard bandGains.count == 6 else { return nil }
+    var gains = parts[2].components(separatedBy: ",").compactMap { Float($0) }
+    if gains.count == 6 { gains.insert(0, at: 5) }
+    guard gains.count == 7 else { return nil }
+    self.bandGains = gains
   }
 
   var rawValue: String {
@@ -601,7 +649,7 @@ struct EqualizerSettings: Equatable, RawRepresentable {
   }
 }
 
-enum LevelingStrength: Int, CaseIterable, Identifiable {
+enum LevelingStrength: Int, CaseIterable, Identifiable, Codable {
   case off
   case low
   case medium
@@ -637,6 +685,14 @@ enum ContinueSectionSize: Int, CaseIterable {
   case extraLarge = 200
 
   var value: CGFloat { CGFloat(rawValue) }
+
+  var episodeCardWidth: CGFloat {
+    switch self {
+    case .default: 200
+    case .large: 240
+    case .extraLarge: 280
+    }
+  }
 
   var displayText: LocalizedStringResource {
     switch self {

@@ -54,6 +54,8 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
       actions.insert(isInQueue ? .removeFromQueue : .addToQueue)
     }
 
+    if Self.canDownloadToWatch(episodeID: episodeID) { actions.insert(.downloadToWatch) }
+
     super.init(downloadState: downloadState, actions: actions)
   }
 
@@ -96,10 +98,21 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
       updatedActions.insert(isInQueue ? .removeFromQueue : .addToQueue)
     }
 
+    if Self.canDownloadToWatch(episodeID: episodeID) { updatedActions.insert(.downloadToWatch) }
+
     actions = updatedActions
   }
 
+  // shortcut: the personal watch relay only transfers downloaded books, not episodes; enable once it supports episodes.
+  private static func canDownloadToWatch(episodeID: String) -> Bool {
+    false
+  }
+
   override func onPlayTapped() {
+    if let mediaProgress = try? MediaProgress.fetch(bookID: episodeID), mediaProgress.isFinished {
+      mediaProgress.currentTime = 0
+    }
+
     if let localEpisode = try? LocalEpisode.fetch(episodeID: episodeID) {
       playerManager.setCurrent(localEpisode)
     } else if let apiEpisode {
@@ -160,6 +173,11 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
 
   override func onRemoveDownloadTapped() {
     downloadManager.deleteEpisodeDownload(episodeID: episodeID, podcastID: podcastID)
+  }
+
+  override func onDownloadToWatchTapped() {
+    WatchConnectivityManager.shared.requestWatchDownload(bookID: episodeID, podcastID: podcastID)
+    actions.remove(.downloadToWatch)
   }
 
   override func onMarkAsFinishedTapped() {

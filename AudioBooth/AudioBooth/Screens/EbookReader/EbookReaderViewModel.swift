@@ -24,6 +24,13 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     case .temporary: return nil
     }
   }
+  var hasAudiobook: Bool {
+    switch source {
+    case .local(_, let bookID): return (try? LocalBook.fetch(bookID: bookID))?.mediaType.contains(.audiobook) == true
+    case .book(let book): return book.mediaType.contains(.audiobook)
+    case .temporary: return false
+    }
+  }
   private(set) var publication: Publication?
   private(set) var navigator: (any Navigator)?
   private var lastProgressUpdate: Date?
@@ -33,17 +40,25 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
   var pendingReadAlongDecorations: [Decoration]?
   var lastReadAlongDecorationAt: Date?
-  var lastDecoratedHREF: String?
+  var lastLeadingDecorationKey: String?
   var lastDecorationAuditAt: Date?
   var readAlongDecorationTask: Task<Void, Never>?
 
   var pendingReadAlongNavigation: Locator?
   var readAlongNavigationTask: Task<Void, Never>?
   var readerSuspendedAt: Date?
+  var mediaOverlayLoad: Task<Void, Never>?
+  var mediaOverlayTimeline: MediaOverlayTimeline?
+  var mediaOverlayClipIndex: Int?
+  var mediaOverlayFollowTask: Task<Void, Never>?
+  var mediaOverlayRetargetTask: Task<Void, Never>?
+  var hasPositionedReader = false
 
   private var catchUpCheck: Task<Void, Never>?
   private var cancellables = Set<AnyCancellable>()
   private var autoScrollTask: Task<Void, Never>?
+  private var restoreLocationTask: Task<Void, Never>?
+  private var locationBeforeResize: Locator?
   private var isAutoScrollPaused: Bool = false
   weak var currentScrollView: UIScrollView?
 
@@ -52,6 +67,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
   init(source: Source) {
     self.source = source
     super.init()
+    cover = EbookCoverViewModel(preferences: preferences)
     observeChanges()
   }
 
@@ -67,6 +83,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       .sink { [weak self] _ in
         guard let self else { return }
         self.applyPreferences(self.preferences)
+        self.updateProgressHeaderInset()
         self.updateAutoScroll()
         self.syncReadAlongPreferences()
       }
@@ -74,6 +91,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
     NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
       .sink { [weak self] _ in
+        self?.catchUpCheck?.cancel()
         self?.suspendReadAlong()
       }
       .store(in: &cancellables)
@@ -95,9 +113,23 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     }
   }
 
+  override func onReaderSizeChanged() {
+    guard let navigator, !preferences.scroll else { return }
+    guard let locator = locationBeforeResize ?? navigator.currentLocation else { return }
+    locationBeforeResize = locator
+
+    restoreLocationTask?.cancel()
+    restoreLocationTask = Task {
+      try? await Task.sleep(for: .milliseconds(300))
+      guard !Task.isCancelled else { return }
+      locationBeforeResize = nil
+      await navigator.go(to: locator, options: NavigatorGoOptions(animated: false))
+    }
+  }
+
   func updateAutoScroll() {
     if preferences.autoScrollSpeed > 0 && preferences.scroll && !isAutoScrollPaused
-      && readAlong?.status.isActive != true
+      && readAlong?.status.isActive != true && !isFollowingMediaOverlay
     {
       startAutoScroll()
     } else {
@@ -113,12 +145,22 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
   override func onDisappear() {
     catchUpCheck?.cancel()
+    mediaOverlayRetargetTask?.cancel()
+    stopFollowingMediaOverlay()
     stopAutoScroll()
-    tearDownReadAlong()
+    NarrationProgressSync.openReaderBookID = nil
     cleanupTemporaryFile()
   }
 
   override func onReadAlongTapped() {
+    if let mediaOverlayLoad {
+      Task {
+        await mediaOverlayLoad.value
+        toggleMediaOverlayReadAlong()
+      }
+      return
+    }
+
     catchUpMessage = nil
     toggleReadAlong()
     updateAutoScroll()
@@ -142,13 +184,13 @@ final class EbookReaderViewModel: EbookReaderView.Model {
   private func refreshCatchUpOffer() {
     guard #available(iOS 26.0, *) else { return }
 
-    guard catchUpCheck == nil, catchUpMessage == nil, readAlong == nil,
+    guard catchUpCheck == nil, catchUpMessage == nil, readAlong == nil, mediaOverlayLoad == nil,
       UserPreferences.shared.positionSyncOffers
     else {
       return
     }
 
-    guard let bookID, supportsReadAlong,
+    guard let bookID, supportsReadAlong, matchingSession() != nil,
       let progress = try? MediaProgress.fetch(bookID: bookID),
       PositionSyncOffer.needsCheck(
         .toEbook,
@@ -249,8 +291,9 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
       let localURL: URL
       switch source {
-      case .local(let url, _):
+      case .local(let url, let bookID):
         localURL = url
+        NarrationImporter.shared.importIfNeeded(bookID: bookID)
 
       case .book(let book):
         localURL = try await downloadEbook(book)
@@ -261,6 +304,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       }
 
       let publication = try await publicationLoader.open(at: localURL)
+      NarrationProgressSync.openReaderBookID = bookID
 
       self.publication = publication
       self.supportsSettings = publication.conforms(to: .epub)
@@ -292,18 +336,40 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       self.navigator = navigator
       self.readerViewController = navigator as? UIViewController
 
+      if navigator is EPUBNavigatorViewController {
+        backgroundColor = themeBackgroundColor
+        textColor = themeTextColor
+      }
+
+      if publication.conforms(to: .epub), publication.metadata.layout != .fixed,
+        let epubNavigator = navigator as? EPUBNavigatorViewController
+      {
+        chapterProgress = ChapterProgressViewModel(
+          navigator: epubNavigator,
+          publication: publication,
+          positions: positions,
+          preferences: preferences
+        )
+      }
+      updateProgressHeaderInset()
+
       updateProgress()
       updateCurrentChapterIndex()
+      setupMediaOverlay(for: publication)
       supportsReadAlong = isReadAlongSupported
       refreshCatchUpOffer()
 
       await setupChapters()
+      (chapterProgress as? ChapterProgressViewModel)?.chapters = chapters
+
+      await (cover as? EbookCoverViewModel)?.load(publication)
 
       isLoading = false
       updateAutoScroll()
     } catch {
       AppLogger.viewModel.error("Failed to load ebook: \(error)")
       self.error = "Failed to load ebook. Please try again."
+      cover = nil
       isLoading = false
     }
   }
@@ -317,7 +383,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
         publication: publication,
         initialLocation: initialLocation,
         config: EPUBNavigatorViewController.Configuration(
-          preferences: preferences.toEPUBPreferences(colorScheme: systemColorScheme),
+          preferences: epubPreferences(for: publication),
           editingActions: editingActions,
           contentInset: [
             .compact: (top: 40, bottom: 0),
@@ -387,6 +453,25 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     } else {
       page = nil
     }
+  }
+
+  private func updateProgressHeaderInset() {
+    let isVisible = chapterProgress != nil && preferences.showProgressHeader
+    let bottomPadding = preferences.scroll ? 0 : ChapterProgressView.pagedBottomPadding
+    let top = isVisible ? ChapterProgressView.topPadding + ChapterProgressView.height + bottomPadding : 0
+    guard let readerViewController, readerViewController.additionalSafeAreaInsets.top != top else { return }
+    readerViewController.additionalSafeAreaInsets.top = top
+  }
+
+  private var themeBackgroundColor: SwiftUI.Color {
+    guard let epubNavigator = navigator as? EPUBNavigatorViewController else { return .clear }
+    return SwiftUI.Color(uiColor: epubNavigator.settings.effectiveBackgroundColor.uiColor)
+  }
+
+  private var themeTextColor: SwiftUI.Color? {
+    guard let epubNavigator = navigator as? EPUBNavigatorViewController else { return nil }
+    let settings = epubNavigator.settings
+    return SwiftUI.Color(uiColor: (settings.textColor ?? settings.theme.contentColor).uiColor)
   }
 
   private func setupChapters() async {
@@ -585,8 +670,17 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       return
     }
 
-    let epubPrefs = preferences.toEPUBPreferences(colorScheme: systemColorScheme)
-    epubNavigator.submitPreferences(epubPrefs)
+    epubNavigator.submitPreferences(epubPreferences(for: publication))
+    backgroundColor = themeBackgroundColor
+    textColor = themeTextColor
+  }
+
+  private func epubPreferences(for publication: Publication?) -> EPUBPreferences {
+    var prefs = preferences.toEPUBPreferences(colorScheme: systemColorScheme)
+    if publication?.metadata.layout != .fixed {
+      prefs.spread = .never
+    }
+    return prefs
   }
 
   private var systemColorScheme: ColorScheme {
@@ -627,7 +721,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
   }
 
   private var minimumSecondsBetweenProgressSyncs: TimeInterval {
-    readAlong?.status == .following ? 15 : 1
+    readAlong?.status == .following || isFollowingMediaOverlay ? 15 : 1
   }
 
   private func syncProgressToServer(_ progress: Double) {
@@ -739,10 +833,21 @@ extension EbookReaderViewModel: EPUBNavigatorDelegate, PDFNavigatorDelegate {
     if let vc = navigator as? UIViewController {
       updateCurrentScrollView(in: vc.view)
     }
+    (chapterProgress as? ChapterProgressViewModel)?.onLocationChanged()
+    mediaOverlayLocationChanged()
   }
 
   func navigator(_ navigator: Navigator, presentError error: NavigatorError) {
     AppLogger.viewModel.error("Navigator error: \(error)")
+  }
+
+  func navigatorContentInset(_ navigator: VisualNavigator) -> UIEdgeInsets? {
+    guard chapterProgress != nil, let viewController = navigator as? UIViewController else { return nil }
+
+    let windowInsets = viewController.view.window?.safeAreaInsets ?? .zero
+    let headerHeight = viewController.additionalSafeAreaInsets.top
+    let top = headerHeight > 0 ? windowInsets.top + headerHeight : max(windowInsets.top, 40)
+    return UIEdgeInsets(top: top, left: 0, bottom: windowInsets.bottom, right: 0)
   }
 }
 

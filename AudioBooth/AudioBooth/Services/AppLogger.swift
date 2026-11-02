@@ -34,6 +34,7 @@ nonisolated enum AppLogger {
     }
 
     general.info("Version \(UIApplication.appVersion)")
+    general.info("Device \(Device.model)")
   }
 
   private static func configureNetworkLogger() {
