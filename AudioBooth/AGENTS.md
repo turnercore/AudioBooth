@@ -17,6 +17,8 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Reconcile downloaded audiobook track offsets and duration from the local assets before local playback; server estimates must not leave offline progress on a different timeline.
 - Resuming after a completed sleep timer clears it without implicitly extending or auto-rearming it; extension remains an explicit alert or shake action.
 - Do not persist auth tokens or custom secret headers in plaintext storage unless an existing platform constraint forces it and the risk is documented.
+- The watch never receives server credentials: do not accept upstream server-connection sharing, direct watch streaming, or tokenized download URLs. Episode "Download to Watch" stays hidden until the relay supports episodes.
+- Gate iOS 27.1-only SDK APIs (hinge, toolbar `axisBehavior`) behind `AUDIOBOOTH_HINGE_SDK` so the Xcode 27.0 SDK keeps building.
 - Watch audiobook bootstrap uses bounded public media shares created and revoked by the authenticated iPhone. Send only the public hostname/base path, share identity/expiry, and expected local-manifest tracks; phone relay remains a fallback.
 - Watch Downloads list is simple and glanceable: Now Playing (local or iPhone remote) always top, On Watch / Available on iPhone grouped by lastPlayedAt, cover shows 48pt circular progress ring, each row has one inline progress line (transfer MB/% or listen %) and a debounced capsule action (Transfer/Scheduling…/Cancel/Retry); no fake Paused/Resume and no Next chapter quick action on Watch.
 - Keep expensive filesystem and SwiftData work off the main actor where possible.
