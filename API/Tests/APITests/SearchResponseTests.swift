@@ -37,6 +37,29 @@ final class SearchResponseTests: XCTestCase {
     XCTAssertEqual(response.genres.map(\.numItems), [0, 8])
   }
 
+  func testDecodingReportsResultsThatFailToDecode() throws {
+    let data = Data(
+      #"""
+      {
+        "book": [{"libraryItem": {"id": "li-1", "media": {"metadata": {"title": "Dune"}}}}],
+        "series": [{"unexpected": true}],
+        "narrators": [{"numBooks": 4}],
+        "tags": {"unexpected": true},
+        "genres": null
+      }
+      """#.utf8
+    )
+
+    let response = try JSONDecoder().decode(SearchResponse.self, from: data)
+
+    XCTAssertTrue(response.book.isEmpty)
+    XCTAssertTrue(response.genres.isEmpty)
+    XCTAssertEqual(response.failedResults.map(\.section), ["book", "series", "narrators", "tags"])
+    XCTAssertEqual(response.failedResults.first?.title, "Dune")
+    XCTAssertTrue(response.failedResults.allSatisfy { !$0.reason.isEmpty })
+    XCTAssertFalse(response.failedResults.contains { $0.reason.contains("Dune") })
+  }
+
   func testDecodingDefaultsMissingSearchSectionsToEmptyArrays() throws {
     let response = try JSONDecoder().decode(SearchResponse.self, from: Data("{}".utf8))
 
@@ -48,5 +71,6 @@ final class SearchResponseTests: XCTestCase {
     XCTAssertTrue(response.narrators.isEmpty)
     XCTAssertTrue(response.tags.isEmpty)
     XCTAssertTrue(response.genres.isEmpty)
+    XCTAssertTrue(response.failedResults.isEmpty)
   }
 }

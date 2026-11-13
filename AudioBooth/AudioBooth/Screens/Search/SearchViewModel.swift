@@ -35,6 +35,7 @@ final class SearchViewModel: SearchView.Model {
     narrators = []
     tags = []
     genres = []
+    failedResults = []
     authorsAreSuggestions = false
     narratorsAreSuggestions = false
     isLoading = false
@@ -100,6 +101,7 @@ final class SearchViewModel: SearchView.Model {
     narrators = searchResult.narrators.map(\.name)
     tags = searchResult.tags.map(\.name)
     genres = searchResult.genres.map(\.name)
+    failedResults = searchResult.failedResults
   }
 
   private func applyFuzzyMatches(for query: String, from filterData: FilterData?) {
@@ -131,6 +133,6 @@ final class SearchViewModel: SearchView.Model {
 private extension SearchResponse {
   var hasResults: Bool {
     !book.isEmpty || !podcast.isEmpty || !episodes.isEmpty || !series.isEmpty || !authors.isEmpty
-      || !narrators.isEmpty || !tags.isEmpty || !genres.isEmpty
+      || !narrators.isEmpty || !tags.isEmpty || !genres.isEmpty || !failedResults.isEmpty
   }
 }

@@ -44,7 +44,7 @@ struct SearchView: View {
         .containerRelativeFrame(.vertical)
     } else if model.books.isEmpty, model.podcasts.isEmpty, model.episodes.isEmpty,
       model.series.isEmpty, model.authors.isEmpty,
-      model.narrators.isEmpty, model.tags.isEmpty, model.genres.isEmpty
+      model.narrators.isEmpty, model.tags.isEmpty, model.genres.isEmpty, model.failedResults.isEmpty
     {
       noResultsState
         .containerRelativeFrame(.vertical)
@@ -100,6 +100,10 @@ struct SearchView: View {
 
   var resultsContent: some View {
     LazyVStack(spacing: 24) {
+      if !model.failedResults.isEmpty {
+        failedResultsSection
+      }
+
       if !model.books.isEmpty {
         booksSection
       }
@@ -268,6 +272,56 @@ struct SearchView: View {
     }
   }
 
+  var failedResultsSection: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label(
+        model.failedResults.count == 1
+          ? "Couldn't show 1 result" : "Couldn't show \(model.failedResults.count) results",
+        systemImage: "exclamationmark.triangle.fill"
+      )
+      .font(.headline)
+      .foregroundStyle(.orange)
+
+      Text("Something unexpected came back from the server. Please report it so it can be fixed.")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+
+      ForEach(Array(model.failedResults.enumerated()), id: \.offset) { _, failure in
+        HStack(alignment: .firstTextBaseline) {
+          Text(failure.title ?? "Unknown item")
+            .font(.subheadline)
+            .lineLimit(1)
+          Text(failure.section)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      HStack(spacing: 16) {
+        Button("Copy Details", systemImage: "doc.on.doc") {
+          UIPasteboard.general.string = failedResultsReport
+          Toast(message: "Copied").show()
+        }
+
+        Link(destination: URL(string: "https://github.com/AudioBooth/AudioBooth/issues")!) {
+          Label("Report", systemImage: "questionmark.bubble")
+        }
+      }
+      .font(.subheadline)
+      .padding(.top, 4)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .background(.orange.opacity(0.1))
+    .clipShape(.rect(cornerRadius: 8))
+  }
+
+  private var failedResultsReport: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    let lines = model.failedResults.map { "- \($0.section): \($0.title ?? "unknown") (\($0.reason))" }
+    return (["AudioBooth \(version): search results that failed to decode"] + lines).joined(separator: "\n")
+  }
+
   var tagsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
@@ -340,6 +394,7 @@ extension SearchView {
     var narrators: [String] = []
     var tags: [String] = []
     var genres: [String] = []
+    var failedResults: [SearchResponse.FailedResult] = []
     var authorsAreSuggestions = false
     var narratorsAreSuggestions = false
 
