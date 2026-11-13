@@ -122,6 +122,9 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
     audiobooksCount = breakdown.audiobooksCount
     ebooksBytes = breakdown.ebooksBytes
     ebooksCount = breakdown.ebooksCount
+    podcastsBytes = breakdown.podcastsBytes
+    podcastsCount = breakdown.podcastsCount
+    databaseBytes = breakdown.databaseBytes
     imageCacheBytes = cache
     totalBytes = total
 
@@ -131,7 +134,8 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   }
 
   private static func computeContentBreakdown() async -> (
-    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int
+    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int,
+    podcastsBytes: Int64, podcastsCount: Int, databaseBytes: Int64
   ) {
     await Task.detached(priority: .utility) {
       computeContentBreakdownOnDisk()
@@ -139,20 +143,24 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   }
 
   nonisolated private static func computeContentBreakdownOnDisk() -> (
-    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int
+    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int,
+    podcastsBytes: Int64, podcastsCount: Int, databaseBytes: Int64
   ) {
     guard
       let appGroupURL = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else {
-      return (0, 0, 0, 0)
+      return (0, 0, 0, 0, 0, 0, 0)
     }
 
     var audiobooksBytes: Int64 = 0
     var audiobooksCount = 0
     var ebooksBytes: Int64 = 0
     var ebooksCount = 0
+    var podcastsBytes: Int64 = 0
+    var podcastsCount = 0
+    var databaseBytes: Int64 = 0
 
     let servers =
       (try? FileManager.default.contentsOfDirectory(
@@ -184,9 +192,33 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
           }
         }
       }
+
+      let episodesDir = server.appendingPathComponent("episodes")
+      if let podcasts = try? FileManager.default.contentsOfDirectory(at: episodesDir, includingPropertiesForKeys: nil) {
+        for podcast in podcasts {
+          let episodes =
+            (try? FileManager.default.contentsOfDirectory(at: podcast, includingPropertiesForKeys: nil)) ?? []
+          for episode in episodes {
+            let size = episode.directorySize
+            if size > 0 {
+              podcastsBytes += size
+              podcastsCount += 1
+            }
+          }
+        }
+      }
+
+      let files =
+        (try? FileManager.default.contentsOfDirectory(at: server, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+      for file in files where file.lastPathComponent.hasPrefix("AudiobookshelfData.sqlite") {
+        let values = try? file.resourceValues(forKeys: [.fileSizeKey])
+        databaseBytes += Int64(values?.fileSize ?? 0)
+      }
     }
 
-    return (audiobooksBytes, audiobooksCount, ebooksBytes, ebooksCount)
+    return (
+      audiobooksBytes, audiobooksCount, ebooksBytes, ebooksCount, podcastsBytes, podcastsCount, databaseBytes
+    )
   }
 
   private func buildServerDownloads() async -> [StoragePreferencesView.ServerDownloads] {

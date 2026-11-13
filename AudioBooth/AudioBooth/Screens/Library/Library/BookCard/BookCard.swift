@@ -5,7 +5,7 @@ import SwiftUI
 extension EnvironmentValues {
   @Entry var itemDisplayMode: BookCard.DisplayMode = .card
   @Entry var coverSize: CGFloat? = nil
-  @Entry var episodeCardWidth: CGFloat? = nil
+  @Entry var posterWidth: CGFloat? = nil
 }
 
 struct BookCard: View {
@@ -49,7 +49,7 @@ struct BookListCard: View {
 
   var body: some View {
     BookCard.Content(model: model)
-      .contentShape(Rectangle())
+      .contentShape(.rect)
       .overlay {
         if !isEditing {
           NavigationLink(value: navigationDestination) {}
@@ -139,7 +139,7 @@ extension BookCard {
         }
         .frame(maxWidth: coverWidth, alignment: .leading)
       }
-      .contentShape(Rectangle())
+      .contentShape(.rect)
     }
 
     private var rowLayout: some View {
@@ -186,7 +186,7 @@ extension BookCard {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .contentShape(Rectangle())
+      .contentShape(.rect)
     }
 
     private var cover: some View {
@@ -210,7 +210,7 @@ extension BookCard {
             }
           }
         }
-        .contentShape(Rectangle())
+        .contentShape(.rect)
     }
 
     @ViewBuilder
@@ -395,6 +395,7 @@ extension BookCard {
     var isDownloaded: Bool
     let isExplicit: Bool
     var timeRemaining: TimeInterval?
+    var summary: String?
 
     func onAppear() {}
 

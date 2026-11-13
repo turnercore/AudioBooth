@@ -158,6 +158,10 @@ extension SessionManager {
       timeout: item == nil ? 30 : 10
     )
 
+    guard PlayerManager.shared.current?.id == (episodeID ?? itemID) else {
+      throw CancellationError()
+    }
+
     let trackCount = audiobookshelfSession.audioTracks?.count ?? 0
     let hlsTrackCount =
       audiobookshelfSession.audioTracks?.count { track in

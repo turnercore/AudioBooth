@@ -1,3 +1,4 @@
+import API
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -121,7 +122,13 @@ nonisolated struct BookShareItem: Transferable, Identifiable {
     for (name, value) in headers {
       request.setValue(value, forHTTPHeaderField: name)
     }
-    let (downloadedURL, _) = try await URLSession.shared.download(for: request)
+
+    let (downloadedURL, response) = try await URLSession.shared.download(for: request)
+
+    if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+      try? FileManager.default.removeItem(at: downloadedURL)
+      throw CocoaError(.fileReadUnknown)
+    }
 
     let fm = FileManager.default
     let directory = fm.temporaryDirectory.appendingPathComponent("ShareEbook", isDirectory: true)

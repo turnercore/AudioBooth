@@ -139,7 +139,7 @@ final class CarPlayHome: CarPlayPageProtocol {
         try? await Task.sleep(for: .milliseconds(500))
 
         PlayerManager.shared.play()
-        nowPlaying?.showNowPlaying()
+        if PlayerManager.shared.current != nil { nowPlaying?.showNowPlaying() }
       } catch {
         AppLogger.player.error("Failed to play episode from CarPlay: \(error)")
       }
@@ -159,7 +159,7 @@ final class CarPlayHome: CarPlayPageProtocol {
       podcast: podcast
     )
     selectedPodcast = details
-    interfaceController.pushTemplate(details.template, animated: true, completion: nil)
+    interfaceController.pushTemplate(details.template, animated: true, completion: { _, _ in })
   }
 
   private func onBookSelected(_ book: Book, completion: @escaping () -> Void) {
@@ -170,7 +170,7 @@ final class CarPlayHome: CarPlayPageProtocol {
       try? await Task.sleep(for: .milliseconds(500))
 
       PlayerManager.shared.play()
-      nowPlaying?.showNowPlaying()
+      if PlayerManager.shared.current != nil { nowPlaying?.showNowPlaying() }
       completion()
       loadingCancellable = nil
 
@@ -196,7 +196,7 @@ final class CarPlayHome: CarPlayPageProtocol {
       }
 
       RunLoop.main.perform {
-        if PlayerManager.shared.current?.isLoading == false {
+        if PlayerManager.shared.current?.isLoading != true {
           continuation.resume()
         } else {
           self.observePlayerLoading(continuation: continuation)
@@ -208,7 +208,7 @@ final class CarPlayHome: CarPlayPageProtocol {
   private func showSectionList(title: String, items: [CPListItem]) {
     let template = CPListTemplate(title: title, sections: [CPListSection(items: items)])
     selectedSectionTemplate = template
-    interfaceController.pushTemplate(template, animated: true, completion: nil)
+    interfaceController.pushTemplate(template, animated: true, completion: { _, _ in })
   }
 
   private func showLibrary(filterType: CarPlayLibrary.FilterType) {
@@ -219,7 +219,7 @@ final class CarPlayHome: CarPlayPageProtocol {
       filterType: filterType
     )
     selected = library
-    interfaceController.pushTemplate(library.template, animated: true, completion: nil)
+    interfaceController.pushTemplate(library.template, animated: true, completion: { _, _ in })
   }
 }
 

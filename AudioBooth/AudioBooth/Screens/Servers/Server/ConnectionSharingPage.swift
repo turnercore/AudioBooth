@@ -47,7 +47,7 @@ struct ConnectionSharingPage: View {
           .font(.footnote)
           .padding(12)
           .background(.orange.opacity(0.1))
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(.rect(cornerRadius: 8))
         } else if model.includeCredentials {
           HStack(alignment: .center, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -63,7 +63,7 @@ struct ConnectionSharingPage: View {
           .font(.footnote)
           .padding(12)
           .background(.orange.opacity(0.1))
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(.rect(cornerRadius: 8))
         }
       }
 

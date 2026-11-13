@@ -34,9 +34,11 @@ final class EbookReaderViewModel: EbookReaderView.Model {
   private(set) var publication: Publication?
   private(set) var navigator: (any Navigator)?
   private var lastProgressUpdate: Date?
+  private var hasUnsyncedProgress = false
   private let audiobookshelf = Audiobookshelf.shared
   private var temporaryFileURL: URL?
-  private var positions: [Locator] = []
+  private var publicationIndex = PublicationIndex()
+  private var positions: [Locator] { publicationIndex.positions }
 
   var pendingReadAlongDecorations: [Decoration]?
   var lastReadAlongDecorationAt: Date?
@@ -144,6 +146,10 @@ final class EbookReaderViewModel: EbookReaderView.Model {
   }
 
   override func onDisappear() {
+    if hasUnsyncedProgress {
+      lastProgressUpdate = nil
+      syncProgressToServer(progress)
+    }
     catchUpCheck?.cancel()
     mediaOverlayRetargetTask?.cancel()
     stopFollowingMediaOverlay()
@@ -309,7 +315,10 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       self.publication = publication
       self.supportsSettings = publication.conforms(to: .epub)
       self.supportsSearch = publication.isSearchable
-      self.positions = (try? await publication.positions().get()) ?? []
+      self.publicationIndex = PublicationIndex(
+        publication: publication,
+        positions: (try? await publication.positions().get()) ?? []
+      )
 
       let initialLocation: Locator?
       if let bookID {
@@ -321,7 +330,8 @@ final class EbookReaderViewModel: EbookReaderView.Model {
           initialLocation = locator
           AppLogger.viewModel.info("Restored from ebookLocation")
         } else {
-          let progress = MediaProgress.progress(for: bookID)
+          let ebookProgress = mediaProgress?.ebookProgress.flatMap { $0 > 0 ? $0 : nil }
+          let progress = ebookProgress ?? MediaProgress.progress(for: bookID)
           initialLocation = await publication.locate(progression: progress)
           AppLogger.viewModel.info("Restored from ebookProgress: \(progress)")
         }
@@ -347,7 +357,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
         chapterProgress = ChapterProgressViewModel(
           navigator: epubNavigator,
           publication: publication,
-          positions: positions,
+          publicationIndex: publicationIndex,
           preferences: preferences
         )
       }
@@ -501,27 +511,27 @@ final class EbookReaderViewModel: EbookReaderView.Model {
         title: link.title ?? "Untitled",
         link: link,
         level: level,
-        pageNumber: pageNumber(forChapterID: id)
+        pageNumber: pageNumber(forChapterID: id),
+        resourceIndex: publicationIndex.readingOrderIndex(of: link.url())
       )
       return [chapter] + flattenTOC(link.children, level: level + 1)
     }
   }
 
   private func pageNumber(forChapterID id: String) -> Int? {
-    guard !positions.isEmpty, !id.contains("#") else { return nil }
-    return positions.first(where: { $0.href.string == id })?.locations.position
+    guard !id.contains("#") else { return nil }
+    return publicationIndex.firstPosition(in: id)
   }
 
   private func updateCurrentChapterIndex() {
-    guard let chapters, let navigator, let publication else { return }
-    guard let current = navigator.currentLocation?.href else { return }
-
-    let readingOrder = publication.readingOrder
-    guard let currentResourceIndex = readingOrder.firstIndexWithHREF(current) else { return }
+    guard let chapters, let navigator else { return }
+    guard let current = navigator.currentLocation?.href,
+      let currentResourceIndex = publicationIndex.readingOrderIndex(of: current)
+    else { return }
 
     let index =
       chapters.chapters.lastIndex(where: { chapter in
-        guard let chapterResourceIndex = readingOrder.firstIndexWithHREF(chapter.link.url()) else { return false }
+        guard let chapterResourceIndex = chapter.resourceIndex else { return false }
         return chapterResourceIndex <= currentResourceIndex
       }) ?? 0
     chapters.currentIndex = index
@@ -624,8 +634,8 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     stopAutoScroll()
     updateCurrentScrollView(in: vc.view)
     autoScrollTask = Task { [weak self] in
-      guard let self else { return }
       while !Task.isCancelled {
+        guard let self else { return }
         let speed = preferences.autoScrollSpeed
         let targetDelta = CGFloat(speed * 20) * 0.016
         let delta = max(targetDelta, 0.25)
@@ -742,10 +752,12 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     if let lastUpdate = lastProgressUpdate,
       now.timeIntervalSince(lastUpdate) < minimumSecondsBetweenProgressSyncs
     {
+      hasUnsyncedProgress = true
       return
     }
 
     lastProgressUpdate = now
+    hasUnsyncedProgress = false
 
     Task {
       do {
@@ -794,7 +806,12 @@ extension EbookReaderViewModel {
       request.setValue(value, forHTTPHeaderField: key)
     }
 
-    let (tempURL, _) = try await URLSession.shared.download(for: request)
+    let (tempURL, response) = try await URLSession.shared.download(for: request)
+
+    if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+      try? FileManager.default.removeItem(at: tempURL)
+      throw EbookError.downloadFailed
+    }
 
     let tempDirectory = FileManager.default.temporaryDirectory
     let fileName = url.lastPathComponent

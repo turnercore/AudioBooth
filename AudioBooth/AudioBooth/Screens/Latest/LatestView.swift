@@ -87,11 +87,23 @@ struct LatestView: View {
     HStack(alignment: .top, spacing: 12) {
       VStack(spacing: 8) {
         Cover(
-          model: Cover.Model(url: episode.coverURL),
+          model: Cover.Model(url: episode.coverURL, downloadProgress: episode.downloadState.progress),
           style: .plain
         )
         .frame(width: 72, height: 72)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay(alignment: .bottomTrailing) {
+          if episode.downloadState == .downloaded {
+            Image(systemName: "arrow.down.circle.fill")
+              .font(.caption2)
+              .foregroundStyle(.white)
+              .padding(.horizontal, 4)
+              .frame(height: 16)
+              .background(.black.opacity(0.6), in: .capsule)
+              .padding(2)
+              .accessibilityLabel("Downloaded")
+          }
+        }
 
         playButton(episode)
       }
@@ -127,7 +139,7 @@ struct LatestView: View {
       Spacer(minLength: 0)
     }
     .padding(.vertical, 10)
-    .contentShape(Rectangle())
+    .contentShape(.rect)
   }
 
   private func playButton(_ episode: Model.Episode) -> some View {
@@ -226,6 +238,7 @@ extension LatestView.Model {
     let publishedAt: Date?
     let duration: Double?
     var progress: Double
+    var downloadState: DownloadManager.DownloadState
     let summary: String?
     let contextMenu: PodcastEpisodeContextMenu.Model?
 

@@ -309,6 +309,7 @@ final class BookPlayerModel: BookPlayer.Model {
           AppLogger.player.error("Failed to recreate session: \(error)")
           isLoading = false
           pendingPlay = false
+          guard playerManager.current === self else { return }
           Toast(error: "Couldn't reconnect. Please try again.").show()
         }
       }
@@ -331,7 +332,7 @@ final class BookPlayerModel: BookPlayer.Model {
     lastSyncedTime = mediaProgress.currentTime
     player.resume()
 
-    if audioSession.outputVolume == 0 {
+    if userPreferences.pauseAtZeroVolume, audioSession.outputVolume == 0 {
       raiseVolumeOrPause()
     }
 
@@ -624,6 +625,7 @@ extension BookPlayerModel {
   }
 
   func stopPlayer() {
+    hasRecordedCompletion = true
     player?.stop()
     player = nil
 
@@ -793,6 +795,11 @@ extension BookPlayerModel {
         autoDownloadIfNeeded()
       } catch {
         AppLogger.player.error("Background session fetch failed: \(error)")
+      }
+
+      guard playerManager.current === self else {
+        isLoading = false
+        return
       }
 
       await resolveMissingDuration()
@@ -1236,7 +1243,7 @@ extension BookPlayerModel {
 
     itemObservation = Task { [weak self] in
       for await updatedItem in LocalBook.observe(where: \.bookID, equals: bookID) {
-        guard !Task.isCancelled, let self else { continue }
+        guard !Task.isCancelled, let self, let updatedItem else { continue }
 
         self.item = updatedItem as any PlayableItem
 
@@ -1262,7 +1269,7 @@ extension BookPlayerModel {
 
     itemObservation = Task { [weak self] in
       for await updatedEpisode in LocalEpisode.observe(where: \.episodeID, equals: episodeID) {
-        guard !Task.isCancelled, let self else { continue }
+        guard !Task.isCancelled, let self, let updatedEpisode else { continue }
 
         self.item = updatedEpisode as any PlayableItem
 
@@ -1469,7 +1476,7 @@ extension BookPlayerModel {
     else { return }
 
     if let chapters, chapters.repeatMode != .off {
-      repeatItem()
+      if autoPlayNext { repeatItem() }
       return
     }
 
@@ -1501,7 +1508,8 @@ extension BookPlayerModel {
         }
       }
     }
-    playerManager.playNext(autoPlay: autoPlayNext)
+    let handOffToNextItem = (timer as? TimerPickerSheetViewModel)?.handOffToNextItem() ?? true
+    playerManager.playNext(autoPlay: autoPlayNext && handOffToNextItem)
   }
 
   private func repeatItem() {
@@ -1605,6 +1613,12 @@ extension BookPlayerModel {
       try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
     }
 
+    guard playerManager.current === self else {
+      isLoading = false
+      isRecovering = false
+      return
+    }
+
     do {
       if !isDownloaded || useRemoteFallback, recoveryAttempts > 1 {
         sessionManager.clearSession()
@@ -1629,6 +1643,8 @@ extension BookPlayerModel {
 
       isLoading = false
       isRecovering = false
+
+      guard playerManager.current === self else { return }
 
       guard pendingPlay else {
         AppLogger.player.info("Playback recovery canceled by the user")

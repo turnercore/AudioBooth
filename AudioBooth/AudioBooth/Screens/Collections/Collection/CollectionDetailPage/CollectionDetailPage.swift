@@ -103,6 +103,12 @@ struct CollectionDetailPage: View {
             Label("Download All", systemImage: "arrow.down.circle")
           }
 
+          if !model.books.isEmpty {
+            Button(action: model.onAddAllToQueueTapped) {
+              Label("Queue All", systemImage: "text.badge.plus")
+            }
+          }
+
           if model.canEdit {
             Divider()
 
@@ -136,6 +142,7 @@ struct CollectionDetailPage: View {
           }
           Button("Cancel", role: .cancel) {}
         }
+        .queueChoiceDialog($model.queueChoice, onSelect: model.onQueueChoiceSelected)
         .tint(.primary)
       }
     }
@@ -262,6 +269,18 @@ struct CollectionDetailPage: View {
   private func episodeRow(_ book: BookCard.Model) -> some View {
     HStack(spacing: 12) {
       Cover(model: book.cover, size: .small)
+        .overlay(alignment: .bottomTrailing) {
+          if book.isDownloaded {
+            Image(systemName: "arrow.down.circle.fill")
+              .font(.caption2)
+              .foregroundStyle(.white)
+              .padding(.horizontal, 4)
+              .frame(height: 16)
+              .background(.black.opacity(0.6), in: .capsule)
+              .padding(2)
+              .accessibilityLabel("Downloaded")
+          }
+        }
         .frame(width: rowCoverSize, height: rowCoverSize)
 
       VStack(alignment: .leading, spacing: 6) {
@@ -298,7 +317,7 @@ struct CollectionDetailPage: View {
       }
       .buttonStyle(.plain)
     }
-    .contentShape(Rectangle())
+    .contentShape(.rect)
     .overlay {
       NavigationLink(value: NavigationDestination.podcast(id: book.podcastID ?? book.id)) {}
         .opacity(0)
@@ -340,7 +359,7 @@ struct CollectionDetailPage: View {
             .padding(.vertical, 6)
             .foregroundStyle(Color.accentColor)
             .background(Color.accentColor.opacity(0.15))
-            .clipShape(Capsule())
+            .clipShape(.capsule)
           }
           .buttonStyle(.plain)
         }
@@ -364,6 +383,7 @@ extension CollectionDetailPage {
     var isPinned: Bool
     var autoDownload: AutoDownloadMode
     var removeCompleted: Bool
+    var queueChoice: QueueChoice?
 
     func onAppear() {}
     func refresh() async {}
@@ -374,6 +394,8 @@ extension CollectionDetailPage {
     func onTogglePin() {}
     func onPlayItem(_ item: BookCard.Model) {}
     func onPlayAll() {}
+    func onAddAllToQueueTapped() {}
+    func onQueueChoiceSelected(_ choice: QueueChoice, scope: QueueChoice.Scope) {}
     func onAutoDownloadChanged(_ mode: AutoDownloadMode) {}
     func onRemoveCompletedChanged(_ value: Bool) {}
     func onDownloadAllTapped() {}
@@ -493,7 +515,7 @@ private struct PinnedPlaylistPreferencesSheet: View {
         .padding(.horizontal)
         .padding(.vertical, 12)
       }
-      .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+      .background(.regularMaterial, in: .rect(cornerRadius: 12))
       .padding(.horizontal)
       .padding(.bottom, 32)
     }

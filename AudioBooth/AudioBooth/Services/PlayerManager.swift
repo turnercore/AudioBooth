@@ -677,6 +677,7 @@ extension PlayerManager {
   }
 
   private func playItem(_ item: QueueItem, autoPlay: Bool) {
+    restartIfFinished(item.bookID)
     let request = selectionRequest
     Task {
       guard selectionRequest == request else { return }
@@ -712,6 +713,12 @@ extension PlayerManager {
 
     selectionID = UUID()
     playItem(item, autoPlay: true)
+  }
+
+  private func restartIfFinished(_ bookID: String) {
+    if let mediaProgress = try? MediaProgress.fetch(bookID: bookID), mediaProgress.isFinished {
+      mediaProgress.currentTime = 0
+    }
   }
 
   fileprivate func saveQueue() {

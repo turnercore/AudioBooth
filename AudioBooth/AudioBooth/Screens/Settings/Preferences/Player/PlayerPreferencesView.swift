@@ -75,6 +75,16 @@ struct PlayerPreferencesView: View {
         }
         .listRowBackground(theme.colors.background.card)
 
+        Toggle(isOn: $preferences.pauseAtZeroVolume) {
+          PreferenceRow(
+            systemImage: "speaker.slash",
+            tint: .red,
+            title: "Pause at Zero Volume",
+            subtitle: "Pause when muted and raise the volume when playing"
+          )
+        }
+        .listRowBackground(theme.colors.background.card)
+
         Toggle(isOn: $preferences.positionSyncOffers) {
           PreferenceRow(
             systemImage: "book.pages",
@@ -266,7 +276,7 @@ private struct NarrationSpeedCard: View {
           RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(isSelected ? Color.black : Color.gray.opacity(0.12))
         )
-        .contentShape(Rectangle())
+        .contentShape(.rect)
     }
     .buttonStyle(.plain)
   }
@@ -286,7 +296,7 @@ private struct NarrationSpeedCard: View {
             .font(.system(size: 18, weight: .bold))
             .foregroundStyle(foreground)
         )
-        .contentShape(Rectangle())
+        .contentShape(.rect)
     }
     .buttonStyle(.plain)
   }

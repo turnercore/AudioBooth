@@ -26,6 +26,8 @@ public final class AuthenticationService: ObservableObject {
 
   public var servers: [String: Server] = [:]
 
+  public var onTokenUpdated: (() -> Void)?
+
   public private(set) var server: Server? {
     didSet {
       if let server {
@@ -258,6 +260,7 @@ public final class AuthenticationService: ObservableObject {
     server.token = token
 
     connections[serverID] = Connection(server)
+    onTokenUpdated?()
   }
 
   public func removeServer(_ serverID: String) {
@@ -292,7 +295,9 @@ public final class AuthenticationService: ObservableObject {
         serverURL: serverURL,
         token: token,
         customHeaders: customHeaders,
-        alias: existingServer.alias
+        alias: existingServer.alias,
+        alternativeURL: existingServer.alternativeURL,
+        isUsingAlternativeURL: existingServer.urlMode == .alternative
       )
 
       var allConnections = connections
@@ -522,7 +527,7 @@ public final class AuthenticationService: ObservableObject {
       let user: User
     }
 
-    let networkService = NetworkService(baseURL: server.activeURL)
+    let networkService = NetworkService(server: server)
 
     var headers = server.customHeaders
     headers["x-refresh-token"] = refreshToken

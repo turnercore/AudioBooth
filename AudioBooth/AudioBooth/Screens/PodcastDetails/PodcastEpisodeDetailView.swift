@@ -103,7 +103,7 @@ struct PodcastEpisodeDetailView: View {
       .padding(.vertical, 6)
       .foregroundStyle(model.isPlaying ? .white : Color.accentColor)
       .background(model.isPlaying ? Color.accentColor : Color.accentColor.opacity(0.15))
-      .clipShape(Capsule())
+      .clipShape(.capsule)
     }
     .buttonStyle(.plain)
     .accessibilityLabel(model.isPlaying ? "Pause" : "Play")
@@ -117,9 +117,17 @@ struct PodcastEpisodeDetailView: View {
         case .notDownloaded:
           Image(systemName: "arrow.down.circle")
             .foregroundStyle(.secondary)
-        case .downloading:
-          Image(systemName: "stop.circle")
-            .foregroundStyle(.orange)
+        case .downloading(let progress):
+          ZStack {
+            ProgressView(value: progress)
+              .progressViewStyle(GaugeProgressViewStyle(tint: .orange, lineWidth: 2))
+
+            Image(systemName: "stop.fill")
+              .font(.system(size: 8))
+              .foregroundStyle(.orange)
+          }
+          .frame(width: 20, height: 20)
+          .contentShape(.rect)
         case .downloaded:
           Image(systemName: "arrow.down.circle.fill")
             .foregroundStyle(.green)

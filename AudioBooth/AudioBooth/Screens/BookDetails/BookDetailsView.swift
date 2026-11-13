@@ -623,7 +623,7 @@ struct BookDetailsView: View {
           )
         )
         .frame(maxHeight: isDescriptionExpanded ? nil : 180, alignment: .top)
-        .contentShape(Rectangle())
+        .contentShape(.rect)
         .clipped()
         .allowsHitTesting(false)
 
@@ -638,7 +638,7 @@ struct BookDetailsView: View {
         }
       }
     }
-    .contentShape(Rectangle())
+    .contentShape(.rect)
     .onTapGesture {
       withAnimation(.easeInOut(duration: 0.25)) {
         isDescriptionExpanded.toggle()

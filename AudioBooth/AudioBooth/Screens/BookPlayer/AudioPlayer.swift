@@ -50,7 +50,7 @@ final class AudioPlayer {
 
   var time: TimeInterval {
     let seconds = player.currentSeconds
-    guard seconds >= 0 else { return mediaProgress.currentTime }
+    guard player.currentItem != nil, seconds >= 0 else { return mediaProgress.currentTime }
     guard !tracks.isEmpty else { return seconds }
     let track = tracks[currentTrackIndex]
     return track.startOffset + min(seconds, track.duration)
@@ -282,7 +282,11 @@ private extension AudioPlayer {
     let track = tracks[index]
     let source = sourceKind(for: url)
     let headers = assetHeaders(for: url, source: source)
-    let item = AVPlayerItem(url: url, headers: headers)
+    let item = AVPlayerItem(
+      url: url,
+      headers: headers,
+      preciseTiming: track.codec?.lowercased() == "opus"
+    )
     if source == .hls {
       item.preferredForwardBufferDuration = 50
     }
@@ -791,8 +795,8 @@ extension LevelingStrength {
 }
 
 extension AVPlayerItem {
-  convenience init(url: URL, headers: [String: String]?) {
-    var options: [String: Any] = [:]
+  convenience init(url: URL, headers: [String: String]?, preciseTiming: Bool) {
+    var options: [String: Any] = [AVURLAssetPreferPreciseDurationAndTimingKey: preciseTiming]
     if !url.isFileURL, let headers, !headers.isEmpty {
       options["AVURLAssetHTTPHeaderFieldsKey"] = headers
     }

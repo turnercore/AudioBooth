@@ -429,7 +429,7 @@ struct PodcastDetailsView: View {
           )
         )
         .frame(maxHeight: isDescriptionExpanded ? nil : 180, alignment: .top)
-        .contentShape(Rectangle())
+        .contentShape(.rect)
         .clipped()
         .allowsHitTesting(false)
 
@@ -444,7 +444,7 @@ struct PodcastDetailsView: View {
         }
       }
     }
-    .contentShape(Rectangle())
+    .contentShape(.rect)
     .onTapGesture {
       withAnimation(.easeInOut(duration: 0.25)) {
         isDescriptionExpanded.toggle()
@@ -486,7 +486,7 @@ struct PodcastDetailsView: View {
             .padding(.vertical, 6)
             .foregroundStyle(Color.accentColor)
             .background(Color.accentColor.opacity(0.15))
-            .clipShape(Capsule())
+            .clipShape(.capsule)
         }
         .buttonStyle(.plain)
         .disabled(model.filteredEpisodes.allSatisfy(\.isCompleted))
@@ -574,7 +574,7 @@ struct PodcastDetailsView: View {
               ? Color.accentColor.opacity(0.15)
               : Color.clear
           )
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(.rect(cornerRadius: 8))
           .id(episode.id)
           Divider()
         }
@@ -622,7 +622,15 @@ struct PodcastDetailsView: View {
         HStack(spacing: 8) {
           episodePlayButton(episode)
 
-          if episode.downloadState == .downloaded {
+          switch episode.downloadState {
+          case .notDownloaded:
+            EmptyView()
+          case .downloading(let progress):
+            ProgressView(value: progress)
+              .progressViewStyle(GaugeProgressViewStyle(lineWidth: 3))
+              .frame(width: 18, height: 18)
+              .accessibilityLabel("Downloading…")
+          case .downloaded:
             Image(systemName: "arrow.down.circle.fill")
               .font(.title3)
               .foregroundStyle(.green)
@@ -643,7 +651,7 @@ struct PodcastDetailsView: View {
         .foregroundStyle(.secondary)
     }
     .padding(.vertical, 10)
-    .contentShape(Rectangle())
+    .contentShape(.rect)
   }
 
   private func episodePlayButton(_ episode: Model.Episode) -> some View {
@@ -664,7 +672,7 @@ struct PodcastDetailsView: View {
       .padding(.vertical, 6)
       .foregroundStyle(isCurrentlyPlaying ? .white : Color.accentColor)
       .background(isCurrentlyPlaying ? Color.accentColor : Color.accentColor.opacity(0.15))
-      .clipShape(Capsule())
+      .clipShape(.capsule)
     }
     .buttonStyle(.plain)
     .accessibilityLabel(isCurrentlyPlaying ? "Pause" : "Play")

@@ -25,7 +25,7 @@ final class HomePageModel: HomePage.Model {
 
   private var continueListening: ContinueListeningCoverFlowView.Model?
   private var continueReading: ContinueListeningCoverFlowView.Model?
-  private var continueListeningEpisodeCards: [EpisodeCard.Model] = []
+  private var continueListeningEpisodePosters: [EpisodePoster.Model] = []
 
   init() {
     super.init()
@@ -84,7 +84,7 @@ final class HomePageModel: HomePage.Model {
     discoverBooks = []
     continueListening = nil
     continueReading = nil
-    continueListeningEpisodeCards = []
+    continueListeningEpisodePosters = []
     sections = []
     isLoading = false
 
@@ -218,7 +218,7 @@ extension HomePageModel {
       case .episodes(let items):
         guard section.id != "continue-listening" else { continue }
         let episodes = items.compactMap { podcast in
-          podcast.recentEpisode.map { EpisodeCardModel(podcast: podcast, episode: $0) }
+          podcast.recentEpisode.map { EpisodePosterModel(podcast: podcast, episode: $0) }
         }
         guard !episodes.isEmpty else { continue }
         sectionsByID[section.id] = .init(
@@ -388,11 +388,11 @@ extension HomePageModel {
 
   private func buildEpisodesContinueListeningSection() -> Section? {
     let existingModels = Dictionary(
-      continueListeningEpisodeCards.map { ($0.id, $0) },
+      continueListeningEpisodePosters.map { ($0.id, $0) },
       uniquingKeysWith: { first, _ in first }
     )
 
-    var models: [EpisodeCard.Model] = []
+    var models: [EpisodePoster.Model] = []
 
     if let currentPlayerID = playerManager.current?.id,
       !continueListeningEpisodes.contains(where: { $0.recentEpisode?.id == currentPlayerID })
@@ -400,7 +400,7 @@ extension HomePageModel {
       if let existingModel = existingModels[currentPlayerID] {
         models.append(existingModel)
       } else if let episode = try? LocalEpisode.fetch(episodeID: currentPlayerID),
-        let model = EpisodeCardModel(localEpisode: episode)
+        let model = EpisodePosterModel(localEpisode: episode)
       {
         models.append(model)
       }
@@ -408,10 +408,10 @@ extension HomePageModel {
 
     for podcast in continueListeningEpisodes {
       guard let episode = podcast.recentEpisode, MediaProgress.progress(for: episode.id) < 1.0 else { continue }
-      models.append(existingModels[episode.id] ?? EpisodeCardModel(podcast: podcast, episode: episode))
+      models.append(existingModels[episode.id] ?? EpisodePosterModel(podcast: podcast, episode: episode))
     }
 
-    continueListeningEpisodeCards = models
+    continueListeningEpisodePosters = models
 
     guard !models.isEmpty else { return nil }
 
@@ -432,7 +432,7 @@ extension HomePageModel {
         return .book(BookCardModel(book, sortBy: .title))
       case .podcast(let podcast):
         if let episode = item.episode {
-          return .episode(EpisodeCardModel(podcast: podcast, episode: episode))
+          return .episode(EpisodePosterModel(podcast: podcast, episode: episode))
         } else {
           return .book(
             BookCard.Model(

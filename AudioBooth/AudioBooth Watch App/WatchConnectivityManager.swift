@@ -55,6 +55,23 @@ struct PhonePlayback {
   }
 }
 
+struct PhoneSleepTimer {
+  let selection: TimerPickerSheet.Selection
+  let chapterEstimates: [TimeInterval]
+
+  init?(dictionary: [String: Any]) {
+    guard dictionary["error"] == nil else { return nil }
+
+    if let remaining = dictionary["remaining"] as? Double {
+      selection = .endsAt(Date().addingTimeInterval(remaining))
+    } else {
+      selection = .none
+    }
+
+    chapterEstimates = dictionary["chapterEstimates"] as? [Double] ?? []
+  }
+}
+
 final class WatchConnectivityManager: NSObject, ObservableObject {
   static let shared = WatchConnectivityManager()
 
@@ -427,6 +444,81 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     }
   }
 
+  func sendSleepTimerCommand(action: String, value: Int? = nil) async -> PhoneSleepTimer? {
+    guard let session, session.isReachable else {
+      AppLogger.watchConnectivity.warning("Cannot send sleep timer command - session not reachable")
+      return nil
+    }
+
+    var message: [String: Any] = [
+      "command": "sleepTimer",
+      "action": action,
+    ]
+    message["value"] = value
+
+    return await withCheckedContinuation { continuation in
+      session.sendMessage(
+        message,
+        replyHandler: { response in
+          continuation.resume(returning: PhoneSleepTimer(dictionary: response))
+        },
+        errorHandler: { error in
+          AppLogger.watchConnectivity.error("Failed to send sleep timer command: \(error)")
+          continuation.resume(returning: nil)
+        }
+      )
+    }
+  }
+
+  func sendBookmark(bookID: String, title: String, time: Int) {
+    guard let session, session.activationState == .activated else {
+      AppLogger.watchConnectivity.warning("Cannot send bookmark - session not activated")
+      return
+    }
+
+    session.transferUserInfo([
+      "command": "addBookmark",
+      "bookID": bookID,
+      "title": title,
+      "time": time,
+    ])
+  }
+
+  func bookmarkTimesInFlight(bookID: String) -> Set<Int> {
+    guard let session else { return [] }
+
+    return Set(
+      session.outstandingUserInfoTransfers
+        .filter { $0.userInfo["command"] as? String == "addBookmark" && $0.userInfo["bookID"] as? String == bookID }
+        .compactMap { $0.userInfo["time"] as? Int }
+    )
+  }
+
+  func fetchBookmarks(bookID: String) async -> [WatchBookmark]? {
+    guard let session, session.isReachable else {
+      AppLogger.watchConnectivity.warning("Cannot fetch bookmarks - session not reachable")
+      return nil
+    }
+
+    return await withCheckedContinuation { continuation in
+      let message: [String: Any] = [
+        "command": "fetchBookmarks",
+        "bookID": bookID,
+      ]
+      session.sendMessage(
+        message,
+        replyHandler: { response in
+          let bookmarks = (response["bookmarks"] as? [[String: Any]])?.compactMap { WatchBookmark(dictionary: $0) }
+          continuation.resume(returning: bookmarks)
+        },
+        errorHandler: { error in
+          AppLogger.watchConnectivity.error("Failed to fetch bookmarks: \(error)")
+          continuation.resume(returning: nil)
+        }
+      )
+    }
+  }
+
   func playOnPhone(_ book: WatchBook, currentTime: Double) {
     guard let session, session.isReachable else {
       AppLogger.watchConnectivity.warning("Cannot play on iPhone - session not reachable")
@@ -525,7 +617,7 @@ final class WatchConnectivityManager: NSObject, ObservableObject {
     completeBackgroundTasksIfNeeded()
 
     Task { [weak self] in
-      try? await Task.sleep(for: .seconds(20))
+      try? await Task.sleep(for: .seconds(10))
       guard let self, let index = backgroundTasks.firstIndex(where: { $0 === task }) else { return }
       backgroundTasks.remove(at: index)
       task.setTaskCompletedWithSnapshot(false)

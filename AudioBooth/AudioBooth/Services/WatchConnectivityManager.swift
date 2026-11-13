@@ -557,8 +557,6 @@ extension WatchConnectivityManager: WCSessionDelegate {
         if let rate = message["rate"] as? Float {
           PlayerManager.shared.current?.speed.onValueChanged(Double(rate))
         }
-      case "refreshContinueListening":
-        refreshContinueListening()
       case "syncDownloadedBooks":
         updateWatchDownloadStatus(
           downloaded: message["bookIDs"] as? [String] ?? [],
@@ -651,6 +649,17 @@ extension WatchConnectivityManager: WCSessionDelegate {
           let bookID = userInfo["bookID"] as? String
         else { return }
         await sendReplacementShare(transferID: transferID, bookID: bookID, session: session)
+      case "addBookmark":
+        guard let bookID = userInfo["bookID"] as? String,
+          let title = userInfo["title"] as? String,
+          let time = userInfo["time"] as? Int,
+          (try? Bookmark.fetch(bookID: bookID, time: time)) == nil
+        else { return }
+        do {
+          _ = try await BookmarkSyncQueue.shared.create(bookID: bookID, title: title, time: time)
+        } catch {
+          AppLogger.watchConnectivity.error("Failed to save watch bookmark: \(error)")
+        }
       default:
         break
       }
@@ -737,6 +746,20 @@ extension WatchConnectivityManager: WCSessionDelegate {
           replyHandler(["error": "Failed to sync local sessions"])
         }
 
+      case "sleepTimer":
+        handleSleepTimer(message, replyHandler: replyHandler)
+
+      case "fetchBookmarks":
+        guard let bookID = message["bookID"] as? String else {
+          replyHandler(["error": "Missing bookID"])
+          return
+        }
+        handleFetchBookmarks(bookID: bookID, replyHandler: replyHandler)
+
+      case "refreshContinueListening":
+        refreshContinueListening()
+        replyHandler([:])
+
       default:
         replyHandler(["error": "Unknown command: \(command)"])
       }
@@ -811,6 +834,62 @@ extension WatchConnectivityManager: WCSessionDelegate {
       AppLogger.watchConnectivity.warning(
         "Could not start Watch relay: \(error.localizedDescription)"
       )
+      replyHandler(["error": error.localizedDescription])
+    }
+  }
+
+  private func handleSleepTimer(
+    _ message: [String: Any],
+    replyHandler: @escaping ([String: Any]) -> Void
+  ) {
+    guard let timer = PlayerManager.shared.current?.timer as? TimerPickerSheetViewModel, !timer.current.isAlarm else {
+      replyHandler(["error": "Sleep timer unavailable"])
+      return
+    }
+
+    switch message["action"] as? String {
+    case "preset":
+      if let minutes = message["value"] as? Int {
+        timer.completedAlert = nil
+        timer.onQuickTimerSelected(minutes)
+      }
+    case "chapter":
+      if let count = message["value"] as? Int {
+        timer.completedAlert = nil
+        timer.onChaptersChanged(count)
+        timer.onStartTimerTapped()
+      }
+    case "cancel":
+      timer.onOffSelected()
+    default:
+      break
+    }
+
+    var reply: [String: Any] = [
+      "chapterEstimates": (1...max(1, timer.maxRemainingChapters)).compactMap {
+        timer.calculateChapterDuration(for: $0)
+      }
+    ]
+    switch timer.current {
+    case .preset(let remaining), .custom(let remaining):
+      reply["remaining"] = remaining
+    case .chapters(let count):
+      reply["remaining"] = timer.calculateChapterDuration(for: count)
+    case .atTime, .duration, .none:
+      break
+    }
+    replyHandler(reply)
+  }
+
+  private func handleFetchBookmarks(
+    bookID: String,
+    replyHandler: @escaping ([String: Any]) -> Void
+  ) {
+    do {
+      let bookmarks = try Bookmark.fetch(bookID: bookID)
+      replyHandler(["bookmarks": bookmarks.map { ["time": $0.time, "title": $0.title] as [String: Any] }])
+    } catch {
+      AppLogger.watchConnectivity.error("Failed to fetch bookmarks for watch: \(error)")
       replyHandler(["error": error.localizedDescription])
     }
   }

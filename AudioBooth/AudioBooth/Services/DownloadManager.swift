@@ -73,10 +73,15 @@ final class DownloadManager: NSObject, ObservableObject {
     case notDownloaded
     case downloading(progress: Double)
     case downloaded
+
+    var progress: Double? {
+      if case .downloading(let progress) = self { return progress }
+      return nil
+    }
   }
 
   struct DownloadFile {
-    let request: URLRequest
+    var request: URLRequest
     let expectedSize: Int64
     let relativePath: String
     let destination: URL
@@ -250,7 +255,8 @@ final class DownloadManager: NSObject, ObservableObject {
 
   func resumeOutstandingRequests() {
     guard Audiobookshelf.shared.libraries.current != nil,
-      NetworkMonitor.shared.interfaceType == .wifi,
+      let interfaceType = NetworkMonitor.shared.interfaceType,
+      [.wifi, .wiredEthernet].contains(interfaceType),
       let serverID = Audiobookshelf.shared.authentication.server?.id,
       ModelContextProvider.shared.activeServerID == serverID
     else { return }
@@ -692,8 +698,18 @@ final class DownloadManager: NSObject, ObservableObject {
 
     Task {
       try? await Task.sleep(for: .seconds(delay))
+      var file = file
+      if resumeData == nil, active === download, let url = file.request.url,
+        let server = Audiobookshelf.shared.authentication.server,
+        relativePath.hasPrefix(server.id + "/"),
+        let credentials = try? await server.freshToken,
+        Audiobookshelf.shared.authentication.server === server
+      {
+        file.request = authorizedRequest(url: url, credentials: credentials)
+      }
       guard active === download, download.files[relativePath] != nil else { return }
       let task = makeTask(for: file, priority: download.priority, resumeData: resumeData)
+      download.files[relativePath]?.request = file.request
       download.files[relativePath]?.task = task
       task.resume()
     }
@@ -1091,17 +1107,18 @@ private final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegat
     }
 
     if let httpResponse = downloadTask.response as? HTTPURLResponse,
-      !(200...299).contains(httpResponse.statusCode)
+      !(200...299).contains(httpResponse.statusCode) || httpResponse.mimeType?.lowercased() == "text/html"
     {
       try? FileManager.default.removeItem(at: location)
 
-      let statusDescription = HTTPURLResponse.localizedString(
-        forStatusCode: httpResponse.statusCode
-      ).capitalized
+      let statusDescription =
+        (200...299).contains(httpResponse.statusCode)
+        ? String(localized: "Unexpected response from server")
+        : HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode).capitalized
       AppLogger.download.error("Download failed with HTTP \(httpResponse.statusCode): \(statusDescription)")
 
       let error = URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: statusDescription])
-      let retryable = httpResponse.statusCode >= 500 || httpResponse.statusCode == 429
+      let retryable = httpResponse.statusCode >= 500 || [401, 429].contains(httpResponse.statusCode)
 
       Task { @MainActor in
         DownloadManager.shared.fileFailed(
@@ -1310,11 +1327,8 @@ extension DownloadManager {
       )
 
       for directory in directories {
-        var isDirectory: ObjCBool = false
-        FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory)
-
-        if isDirectory.boolValue {
-          try? FileManager.default.removeItem(at: directory)
+        for name in ["audiobooks", "ebooks", "narration", "episodes", "covers"] {
+          try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
         }
       }
 

@@ -19,6 +19,15 @@ struct PlayerOptionsSheet: View {
         }
       }
 
+      if model.hasBookmarks {
+        Button(action: {
+          model.onBookmarksTapped()
+          dismiss()
+        }) {
+          Label("Bookmarks", systemImage: "bookmark")
+        }
+      }
+
       Button(action: {
         model.onPlayOnPhoneTapped()
         dismiss()
@@ -34,6 +43,13 @@ struct PlayerOptionsSheet: View {
           "Speed (\(model.speed.formatted(.number.precision(.fractionLength(0...2))))×)",
           systemImage: "gauge.with.dots.needle.33percent"
         )
+      }
+
+      Button(action: {
+        model.onTimerTapped()
+        dismiss()
+      }) {
+        Label("Sleep Timer", systemImage: "moon.zzz")
       }
 
       Button(action: {
@@ -89,6 +105,9 @@ extension PlayerOptionsSheet {
     var downloadState: DownloadManager.DownloadState
     var speed: Float
     var speedPicker: SpeedPickerSheet.Model
+    var timer: TimerPickerSheet.Model
+    var bookmarks: BookmarksSheet.Model
+    var hasBookmarks: Bool = false
 
     var isCoverDownloadEnabled: Bool {
       switch downloadState {
@@ -108,6 +127,8 @@ extension PlayerOptionsSheet {
       self.downloadState = downloadState
       self.speed = speed
       self.speedPicker = SpeedPickerSheet.Model(speed: speed)
+      self.timer = TimerPickerSheet.Model()
+      self.bookmarks = BookmarksSheet.Model()
     }
 
     func onChaptersTapped() {}
@@ -116,6 +137,12 @@ extension PlayerOptionsSheet {
     func onPlayOnPhoneTapped() {}
     func onSpeedTapped() {
       speedPicker.isPresented = true
+    }
+    func onTimerTapped() {
+      timer.isPresented = true
+    }
+    func onBookmarksTapped() {
+      bookmarks.isPresented = true
     }
   }
 }

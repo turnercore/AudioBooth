@@ -16,6 +16,7 @@ final class LibraryPageModel: LibraryPage.Model {
   private var isLoadingNextPage: Bool = false
   private let itemsPerPage: Int = 100
   private var loadTask: Task<Void, Never>?
+  private var loadGeneration = 0
 
   init() {
     let preferences = UserPreferences.shared
@@ -112,6 +113,7 @@ final class LibraryPageModel: LibraryPage.Model {
   override func refresh() async {
     loadTask?.cancel()
     loadTask = nil
+    loadGeneration += 1
     exitSelection()
     isLoading = true
     isLoadingNextPage = false
@@ -166,7 +168,7 @@ final class LibraryPageModel: LibraryPage.Model {
   }
 
   override func loadNextPageIfNeeded() {
-    guard loadTask == nil else { return }
+    guard loadTask == nil, search.searchText.isEmpty else { return }
     loadTask = Task {
       await loadBooks()
     }
@@ -228,12 +230,28 @@ final class LibraryPageModel: LibraryPage.Model {
   }
 
   override func onPlayAllTapped() {
-    play(allBooks)
+    start(.play)
   }
 
   override func onPlaySelectedTapped() {
-    play(selectedBooks)
+    perform(.play, with: selectedBooks)
     exitSelection()
+  }
+
+  override func onAddToQueueTapped() {
+    if isSelecting {
+      perform(.addToQueue, with: selectedBooks)
+      exitSelection()
+    } else {
+      start(.addToQueue)
+    }
+  }
+
+  override func onQueueChoiceSelected(_ choice: QueueChoice, scope: QueueChoice.Scope) {
+    switch scope {
+    case .unfinished: perform(choice.action, with: allBooks.filter { MediaProgress.progress(for: $0.id) < 1.0 })
+    case .all: perform(choice.action, with: allBooks)
+    }
   }
 
   override func onResetAllProgressTapped() {
@@ -278,12 +296,18 @@ final class LibraryPageModel: LibraryPage.Model {
     allBooks.filter { selectedIDs.contains($0.id) }
   }
 
-  private func play(_ books: [BookCard.Model]) {
-    guard !books.isEmpty else { return }
+  private func start(_ action: QueueChoice.Action) {
+    let books = allBooks
+    let unfinishedCount = books.count { MediaProgress.progress(for: $0.id) < 1.0 }
+    if unfinishedCount == 0 || unfinishedCount == books.count {
+      perform(action, with: books)
+    } else {
+      queueChoice = QueueChoice(action: action, unfinishedCount: unfinishedCount, totalCount: books.count)
+    }
+  }
 
-    let notCompleted = books.filter { MediaProgress.progress(for: $0.id) < 1.0 }
-    let source = notCompleted.isEmpty ? books : notCompleted
-    let queueItems = source.map { book in
+  private func perform(_ action: QueueChoice.Action, with books: [BookCard.Model]) {
+    let items = books.map { book in
       QueueItem(
         bookID: book.id,
         title: book.title,
@@ -292,7 +316,15 @@ final class LibraryPageModel: LibraryPage.Model {
         podcastID: book.podcastID
       )
     }
-    playerManager.playAll(queueItems)
+
+    switch action {
+    case .play:
+      playerManager.playAll(items)
+    case .addToQueue:
+      for item in items {
+        playerManager.addToQueue(item)
+      }
+    }
   }
 
   private func updateActions() {
@@ -328,6 +360,7 @@ final class LibraryPageModel: LibraryPage.Model {
   private func loadBooks() async {
     guard hasMorePages && !isLoadingNextPage && search.searchText.isEmpty else { return }
 
+    let generation = loadGeneration
     isLoadingNextPage = true
     isLoading = currentPage == 0
     pageLoadFailed = false
@@ -347,11 +380,7 @@ final class LibraryPageModel: LibraryPage.Model {
         libraryID: libraryID
       )
 
-      guard !Task.isCancelled else {
-        isLoadingNextPage = false
-        isLoading = false
-        return
-      }
+      guard generation == loadGeneration else { return }
 
       var newItems = [LibraryView.Item]()
       let ignorePrefix = isRoot && (audiobookshelf.authentication.server?.sortingIgnorePrefix ?? false)
@@ -389,11 +418,7 @@ final class LibraryPageModel: LibraryPage.Model {
       totalCount = response.total
       hasMorePages = (currentPage * itemsPerPage) < response.total
     } catch {
-      guard !Task.isCancelled else {
-        isLoadingNextPage = false
-        isLoading = false
-        return
-      }
+      guard generation == loadGeneration else { return }
 
       pageLoadFailed = true
       if currentPage == 0 {

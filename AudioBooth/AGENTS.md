@@ -7,7 +7,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 ## Ownership
 
 - Own files under `AudioBooth/`.
-- `AudioBooth/AudioBooth.xcodeproj` is the primary project.
+- `AudioBooth/AudioBooth.xcodeproj` is the primary project, stored in Xcode 27's `project.xcproj` text format (no `project.pbxproj`). Personal delta there: no RevenueCat package or StoreKit framework, Nuke/NukeUI on app, watch, and widget, and the `AudioBoothTests` unit-test target. Re-apply it when taking upstream project changes; check with `xcprojformatter AudioBooth/AudioBooth.xcodeproj` and `xcodebuild -list`.
 - App group, entitlements, widgets, watch app, CarPlay, and local signing all converge here.
 
 ## Local Contracts
@@ -25,6 +25,7 @@ Xcode project containing the iOS app, watch app, widgets, app intents, UI screen
 - Do not commit `AudioBooth/Local.xcconfig`.
 - Preserve the personal app identifiers, `group.com.turnercore.audioBS` app-group setup, and intentionally absent CarPlay entitlement unless the user explicitly requests a signing or capability change.
 - In-app purchases and the Tip Jar are intentionally removed from `personal-main`. Do not restore StoreKit configuration, RevenueCat dependencies or startup code, Tip Jar views/models, or settings links when resolving upstream merges.
+- Volume dropping to 0 during playback never pauses (AirPlay handoff); upstream's Pause at Zero Volume preference only gates the raise-or-pause check when playback starts.
 - Treat personal AirPlay and playback-route behavior as an intentional merge-sensitive delta. Review `PlayerManager`, `BookPlayerModel`, `SessionManager`, and the personal-only commit history before accepting upstream playback changes.
 - Treat `AVPlayerItem.failedToPlayToEndTimeNotification` as terminal for that item: preserve play intent, rebuild the queue/session, and keep playback diagnostics free of URLs, session IDs, headers, and tokens.
 - Personal-branch signing and product changes are not assumed to be appropriate for upstream main.

@@ -3,14 +3,18 @@ import Nuke
 import NukeUI
 import SwiftUI
 
-struct EpisodeCard: View {
+struct EpisodePoster: View {
   @ObservedObject var model: Model
 
-  @Environment(\.episodeCardWidth) private var customWidth
+  @Environment(\.posterWidth) private var customWidth
   @ScaledMetric(relativeTo: .title) private var defaultWidth: CGFloat = 200
 
   private var width: CGFloat {
     customWidth ?? defaultWidth
+  }
+
+  private var isCompact: Bool {
+    width <= defaultWidth
   }
 
   private var backgroundColor: Color {
@@ -83,8 +87,8 @@ struct EpisodeCard: View {
       artwork
     }
     .background(backgroundColor)
-    .clipShape(RoundedRectangle(cornerRadius: 16))
-    .contentShape(RoundedRectangle(cornerRadius: 16))
+    .clipShape(.rect(cornerRadius: 16))
+    .contentShape(.rect(cornerRadius: 16))
   }
 
   private var artwork: some View {
@@ -109,6 +113,34 @@ struct EpisodeCard: View {
         endPoint: .bottom
       )
     }
+    .overlay(alignment: .topTrailing) {
+      downloadIndicator
+        .padding(8)
+    }
+  }
+
+  @ViewBuilder
+  private var downloadIndicator: some View {
+    switch model.downloadState {
+    case .notDownloaded:
+      EmptyView()
+    case .downloading(let progress):
+      ProgressView(value: progress)
+        .progressViewStyle(GaugeProgressViewStyle(tint: .white, lineWidth: 2))
+        .frame(width: 12, height: 12)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(.black.opacity(0.6), in: .capsule)
+        .accessibilityLabel("Downloading…")
+    case .downloaded:
+      Image(systemName: "arrow.down.circle.fill")
+        .font(isCompact ? .caption2 : .caption)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(.black.opacity(0.6), in: .capsule)
+        .accessibilityLabel("Downloaded")
+    }
   }
 
   private var controls: some View {
@@ -125,6 +157,7 @@ struct EpisodeCard: View {
 
           if let playText = model.playText {
             Text(playText)
+              .font(isCompact ? .footnote : .subheadline)
               .lineLimit(1)
           }
         }
@@ -149,7 +182,7 @@ struct EpisodeCard: View {
           .fontWeight(.semibold)
           .foregroundStyle(.white.opacity(0.8))
           .frame(width: 32, height: 32)
-          .contentShape(Rectangle())
+          .contentShape(.rect)
       }
       .menuOrder(.priority)
       .accessibilityLabel("More")
@@ -157,7 +190,7 @@ struct EpisodeCard: View {
   }
 }
 
-extension EpisodeCard {
+extension EpisodePoster {
   @Observable
   class Model: ObservableObject, Identifiable {
     let id: String
@@ -169,6 +202,7 @@ extension EpisodeCard {
     let duration: Double?
     var progress: Double
     var isPlaying = false
+    var downloadState: DownloadManager.DownloadState = .notDownloaded
     var backgroundColor: Color?
     let contextMenu: PodcastEpisodeContextMenu.Model
 
@@ -214,8 +248,8 @@ extension EpisodeCard {
 
 #Preview {
   NavigationStack {
-    EpisodeCard(
-      model: EpisodeCard.Model(
+    EpisodePoster(
+      model: EpisodePoster.Model(
         id: "episode",
         podcastID: "podcast",
         title: "The 'But China!' Dilemma Driving the A.I. Race",

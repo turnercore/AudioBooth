@@ -101,7 +101,10 @@ final class StorageManager {
           for book in downloadedBooks {
             if book.bookID == currentlyPlaying { continue }
 
-            let lastUsed = progressByBookID[book.bookID]?.lastPlayedAt ?? book.createdAt
+            let lastUsed = max(
+              progressByBookID[book.bookID]?.lastPlayedAt ?? .distantPast,
+              book.downloadedAt ?? book.createdAt
+            )
 
             if lastUsed < cutoffDate {
               AppLogger.download.info("Removing unused download: \(book.title) (last used: \(lastUsed))")
@@ -114,8 +117,10 @@ final class StorageManager {
           for episode in downloadedEpisodes {
             guard episode.episodeID != currentlyPlaying, let podcastID = episode.podcast?.podcastID else { continue }
 
-            let lastUsed =
-              progressByBookID[episode.episodeID]?.lastPlayedAt ?? episode.downloadedAt ?? episode.createdAt
+            let lastUsed = max(
+              progressByBookID[episode.episodeID]?.lastPlayedAt ?? .distantPast,
+              episode.downloadedAt ?? episode.createdAt
+            )
 
             if lastUsed < cutoffDate {
               AppLogger.download.info("Removing unused episode download: \(episode.title) (last used: \(lastUsed))")

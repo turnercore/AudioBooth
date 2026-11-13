@@ -13,6 +13,9 @@ final class UserPreferences: ObservableObject {
   @AppStorage("playerControls")
   var playerControls: [PlayerControl] = PlayerControl.default
 
+  @AppStorage("hidePlayerControlLabels")
+  var hidePlayerControlLabels: Bool = false
+
   @AppStorage("autoDownloadBooks")
   var autoDownloadBooks: AutoDownloadMode = .off
 
@@ -114,6 +117,9 @@ final class UserPreferences: ObservableObject {
 
   @AppStorage("mixWithOtherAudio")
   var mixWithOtherAudio: Bool = false
+
+  @AppStorage("pauseAtZeroVolume")
+  var pauseAtZeroVolume: Bool = true
 
   @AppStorage("volumeLevel")
   var volumeLevel: Double = 1.0
@@ -670,11 +676,13 @@ enum LevelingStrength: Int, CaseIterable, Identifiable, Codable {
 enum ContinueListeningStyle: String, CaseIterable {
   case carousel
   case coverFlow
+  case poster
 
   var displayText: LocalizedStringResource {
     switch self {
     case .carousel: "Carousel"
     case .coverFlow: "Cover Flow"
+    case .poster: "Poster"
     }
   }
 }
@@ -686,7 +694,7 @@ enum ContinueSectionSize: Int, CaseIterable {
 
   var value: CGFloat { CGFloat(rawValue) }
 
-  var episodeCardWidth: CGFloat {
+  var posterWidth: CGFloat {
     switch self {
     case .default: 200
     case .large: 240
