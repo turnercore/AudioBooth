@@ -1,4 +1,5 @@
 import Combine
+import ReadiumNavigator
 import SwiftUI
 import UIKit
 
@@ -6,11 +7,13 @@ struct EbookReaderView: View {
   @ObservedObject var model: Model
   @Environment(\.dismiss) private var dismiss
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.scenePhase) private var scenePhase
 
   @State private var showControls = false
   @State private var showSettings = false
-  @State private var showPlayerSheet = false
   @State private var showZoneEditor = false
+  @State private var headerCornerInsets = EdgeInsets()
+  @State private var headerTop: CGFloat = 0
 
   @State var preferredColorScheme: ColorScheme?
 
@@ -18,6 +21,49 @@ struct EbookReaderView: View {
   private let userPreferences = UserPreferences.shared
 
   var body: some View {
+    contentWithSheets
+      .onChange(of: showZoneEditor) { _, isShowing in
+        if isShowing { showControls = false }
+      }
+      .onChange(of: showControls) { _, value in
+        model.onShowControlsChanged(value)
+      }
+      .onChange(of: model.preferences.preferredColorScheme, initial: true) { _, scheme in
+        preferredColorScheme = scheme
+      }
+      .onChange(of: colorScheme) { _, _ in
+        if scenePhase == .active && model.preferences.theme == .auto {
+          model.onPreferencesChanged(model.preferences)
+        }
+        preferredColorScheme = model.preferences.preferredColorScheme
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase == .active && model.preferences.theme == .auto {
+          model.onPreferencesChanged(model.preferences)
+        }
+      }
+      .onAppear {
+        UIApplication.shared.isIdleTimerDisabled = userPreferences.keepScreenAwakeInPlayer
+        model.onAppear()
+      }
+      .onDisappear {
+        UIApplication.shared.isIdleTimerDisabled = false
+        model.onDisappear()
+      }
+      .statusBarHidden(true)
+      .preferredColorScheme(preferredColorScheme)
+      .background {
+        if volumeButtonsEnabled {
+          VolumeButtonObserver(
+            onVolumeUp: { model.onTapRight() },
+            onVolumeDown: { model.onTapLeft() }
+          )
+          .allowsHitTesting(false)
+        }
+      }
+  }
+
+  private var content: some View {
     ZStack {
       if model.isLoading {
         loadingView
@@ -29,7 +75,12 @@ struct EbookReaderView: View {
     }
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(.hidden, for: .navigationBar)
-    .toolbar {
+    .toolbar { toolbarContent }
+  }
+
+  @ToolbarContentBuilder
+  private var toolbarContent: some ToolbarContent {
+    if model.cover?.isVisible != true {
       ToolbarItem(placement: .topBarLeading) {
         if showControls, !model.isLoading, model.error == nil, model.supportsSearch {
           Button {
@@ -61,67 +112,107 @@ struct EbookReaderView: View {
         }
       }
     }
-    .sheet(isPresented: $showSettings) {
-      EbookReaderPreferencesView(preferences: model.preferences) {
-        showSettings = false
-        Task {
-          try? await Task.sleep(for: .milliseconds(400))
-          showZoneEditor = true
+  }
+
+  private var contentWithOverlays: some View {
+    content
+      .overlay(alignment: .top) {
+        if let readAlong = model.readAlong, let message = readAlongStatusMessage(readAlong.status) {
+          ReadAlongStatusPill(message: message, status: readAlong.status)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        } else if let message = model.catchUpMessage {
+          PositionSyncBanner(
+            message: message,
+            onCatchUp: model.onCatchUpTapped,
+            onDismiss: model.onCatchUpDismissed
+          )
+          .padding(.top, 8)
+          .transition(.move(edge: .top).combined(with: .opacity))
+        } else if let chapterProgress = model.chapterProgress, model.preferences.showProgressHeader,
+          !showControls, !model.isLoading
+        {
+          ChapterProgressView(model: chapterProgress)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+              proxy.frame(in: .global).minY
+            } action: { top in
+              headerTop = top
+            }
+            .padding(.leading, headerCornerInsets.leading)
+            .padding(.trailing, headerCornerInsets.trailing)
+            .foregroundStyle(model.textColor ?? .primary)
+            .background(model.backgroundColor.ignoresSafeArea(edges: .top))
+            .ignoresHorizontalSafeAreaWhenReservedRegionsAvailable()
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
       }
-    }
-    .overlay {
-      if showZoneEditor {
-        EbookTapZonesEditorView(preferences: model.preferences) {
-          showZoneEditor = false
+      .animation(.easeInOut(duration: 0.2), value: showControls)
+      .animation(.easeInOut(duration: 0.25), value: model.catchUpMessage)
+      .animation(.easeInOut(duration: 0.25), value: model.readAlong?.status)
+      .overlay {
+        if showZoneEditor {
+          EbookTapZonesEditorView(preferences: model.preferences) {
+            showZoneEditor = false
+          }
+          .transition(.opacity)
         }
-        .transition(.opacity)
       }
-    }
-    .animation(.easeInOut(duration: 0.2), value: showZoneEditor)
-    .onChange(of: showZoneEditor) { _, isShowing in
-      if isShowing { showControls = false }
-    }
-    .onChange(of: showControls) { _, value in
-      model.onShowControlsChanged(value)
-    }
-    .onChange(of: colorScheme) { _, _ in
-      if model.preferences.theme == .auto {
-        model.onPreferencesChanged(model.preferences)
+      .animation(.easeInOut(duration: 0.2), value: showZoneEditor)
+      .overlay {
+        if let cover = model.cover {
+          EbookCoverView(model: cover)
+        }
       }
-      preferredColorScheme = model.preferences.theme.colorScheme
-    }
-    .sheet(
-      isPresented: Binding(
-        get: { model.chapters?.isPresented ?? false },
-        set: { if let chapters = model.chapters { chapters.isPresented = $0 } }
-      )
-    ) {
-      if let chapters = model.chapters {
-        EbookChapterPickerSheet(model: chapters)
+  }
+
+  private var contentWithSheets: some View {
+    contentWithOverlays
+      .sheet(isPresented: $showSettings) {
+        EbookReaderPreferencesView(preferences: model.preferences, hasHinge: model.cover?.hasHinge == true) {
+          showSettings = false
+          Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            showZoneEditor = true
+          }
+        }
       }
-    }
-    .sheet(item: $model.search) { searchModel in
-      EbookSearchView(model: searchModel)
-    }
-    .adaptiveSheet(isPresented: $showPlayerSheet) {
-      if let player = playerManager.current {
-        EbookPlayerSheet(player: player)
+      .sheet(isPresented: isChaptersPresented) {
+        if let chapters = model.chapters {
+          EbookChapterPickerSheet(model: chapters)
+        }
       }
-    }
-    .onAppear(perform: model.onAppear)
-    .onDisappear(perform: model.onDisappear)
-    .statusBarHidden(!showControls)
-    .preferredColorScheme(preferredColorScheme)
-    .background {
-      if volumeButtonsEnabled {
-        VolumeButtonObserver(
-          onVolumeUp: { model.onTapRight() },
-          onVolumeDown: { model.onTapLeft() }
+      .sheet(item: $model.search) { searchModel in
+        EbookSearchView(model: searchModel)
+      }
+      .sheet(item: $model.positionSync) { positionSync in
+        PositionSyncSheet(model: positionSync)
+      }
+      .adaptiveSheet(
+        isPresented: Binding(
+          get: { model.playerSheet?.isPresented ?? false },
+          set: { newValue in model.playerSheet?.isPresented = newValue }
         )
-        .allowsHitTesting(false)
+      ) {
+        if let playerSheet = model.playerSheet {
+          EbookPlayerSheet(model: playerSheet)
+        }
       }
-    }
+      .sheet(
+        item: Binding(
+          get: { model.playerSheet?.player.positionSync },
+          set: { newValue in model.playerSheet?.player.positionSync = newValue }
+        )
+      ) { positionSync in
+        PositionSyncSheet(model: positionSync)
+      }
+  }
+
+  private var isChaptersPresented: Binding<Bool> {
+    Binding(
+      get: { model.chapters?.isPresented ?? false },
+      set: { if let chapters = model.chapters { chapters.isPresented = $0 } }
+    )
   }
 
   private var volumeButtonsEnabled: Bool {
@@ -160,16 +251,24 @@ struct EbookReaderView: View {
   private func readerView(_ viewController: UIViewController) -> some View {
     ReaderViewControllerWrapper(
       viewController: viewController,
+      onTap: { handleTap(at: $0) },
       onPencilDoubleTap: { model.onTapRight() },
       onPencilSqueeze: { model.onTapLeft() }
     )
-    .ignoresSafeArea(.all)
-    .simultaneousGesture(
-      SpatialTapGesture()
-        .onEnded { value in
-          handleTap(at: value.location)
-        }
-    )
+    .padding(.horizontal, closedHingePadding)
+    .background(model.backgroundColor)
+    .background {
+      GeometryReader { proxy in
+        SwiftUI.Color.clear
+          .onChange(of: proxy.topCornerInsets(at: headerTop), initial: true) { _, corners in
+            headerCornerInsets = corners
+          }
+          .onChange(of: proxy.size) {
+            model.onReaderSizeChanged()
+          }
+      }
+    }
+    .ignoresSafeArea()
     .animation(.easeInOut(duration: 0.2), value: showControls)
     .onAppear {
       showControls = true
@@ -180,6 +279,11 @@ struct EbookReaderView: View {
         }
       }
     }
+  }
+
+  private var closedHingePadding: CGFloat {
+    guard model.cover?.isHingeClosed == true else { return 0 }
+    return 15 * model.preferences.pageMargins.value
   }
 
   private func handleTap(at point: CGPoint) {
@@ -230,10 +334,73 @@ struct EbookReaderView: View {
   }
 
   private var progressLabel: String {
-    if model.preferences.progressDisplay == .page, let page = model.page {
-      return String(localized: "\(page.current) of \(page.total)")
+    if let page = displayedPage {
+      return page.current.formatted()
     }
     return model.progress.formatted(.percent.precision(.fractionLength(0)))
+  }
+
+  private var progressCaption: String {
+    if let page = displayedPage {
+      return String(localized: "of \(page.total)")
+    }
+    return String(localized: "Progress")
+  }
+
+  private var displayedPage: (current: Int, total: Int)? {
+    model.preferences.progressDisplay == .page ? model.page : nil
+  }
+
+  private var isReadAlongActive: Bool {
+    if model.isFollowingMediaOverlay {
+      return playerManager.isPlaying
+    }
+    return model.readAlong?.status.isActive == true
+  }
+
+  @ViewBuilder
+  private var readAlongIcon: some View {
+    if model.isFollowingMediaOverlay {
+      Image(systemName: "waveform")
+        .symbolEffect(.variableColor.iterative, options: .repeating, isActive: playerManager.isPlaying)
+    } else {
+      readAlongStatusIcon
+    }
+  }
+
+  @ViewBuilder
+  private var readAlongStatusIcon: some View {
+    switch model.readAlong?.status {
+    case .preparing:
+      ProgressView()
+        .controlSize(.small)
+    case .locating:
+      Image(systemName: "waveform.badge.magnifyingglass")
+    case .following:
+      Image(systemName: "waveform")
+        .symbolEffect(.variableColor.iterative, options: .repeating)
+    case .failed:
+      Image(systemName: "waveform.badge.exclamationmark")
+    case .off, .none:
+      Image(systemName: "waveform")
+    }
+  }
+
+  private func readAlongStatusMessage(_ status: ReadAlongCoordinator.Status) -> String? {
+    switch status {
+    case let .preparing(fraction):
+      model.isCatchingUpToNarration
+        ? String(localized: "Getting ready… \(fraction.formatted(.percent.precision(.fractionLength(0))))")
+        : String(localized: "Preparing Read Along… \(fraction.formatted(.percent.precision(.fractionLength(0))))")
+    case .locating:
+      model.isCatchingUpToNarration
+        ? String(localized: "Finding where the narrator is…")
+        : String(localized: "Listening for your place in the book…")
+    case let .failed(message):
+      message
+    case .off, .following:
+      nil
+    }
   }
 
   @ViewBuilder
@@ -244,6 +411,7 @@ struct EbookReaderView: View {
           VStack(spacing: 6) {
             Image(systemName: "list.bullet")
               .font(.system(size: 20))
+              .frame(height: 20)
             Text("Contents")
               .font(.caption2)
           }
@@ -259,6 +427,7 @@ struct EbookReaderView: View {
           VStack(spacing: 6) {
             Image(systemName: "textformat.size")
               .font(.system(size: 20))
+              .frame(height: 20)
             Text("Settings")
               .font(.caption2)
           }
@@ -271,17 +440,34 @@ struct EbookReaderView: View {
           Text(progressLabel)
             .font(.system(size: 16, weight: .medium))
             .monospacedDigit()
-          Text("Progress")
+            .lineLimit(1)
+            .frame(width: 60, height: 20)
+          Text(progressCaption)
             .font(.caption2)
         }
       }
       .frame(maxWidth: .infinity)
 
+      if model.supportsReadAlong {
+        Button(action: { model.onReadAlongTapped() }) {
+          VStack(spacing: 6) {
+            readAlongIcon
+              .font(.system(size: 20))
+              .frame(height: 20)
+            Text("Read Along")
+              .font(.caption2)
+          }
+        }
+        .frame(maxWidth: .infinity)
+        .tint(isReadAlongActive ? .accentColor : .primary)
+      }
+
       if playerManager.current != nil {
-        Button(action: { showPlayerSheet = true }) {
+        Button(action: model.onNowPlayingTapped) {
           VStack(spacing: 6) {
             Image(systemName: "playpause.circle")
               .font(.system(size: 20))
+              .frame(height: 20)
             Text("Now Playing")
               .font(.caption2)
           }
@@ -293,12 +479,33 @@ struct EbookReaderView: View {
   }
 }
 
+extension View {
+  @ViewBuilder
+  fileprivate func ignoresHorizontalSafeAreaWhenReservedRegionsAvailable() -> some View {
+    if #available(iOS 27.1, *) {
+      ignoresSafeArea(edges: .horizontal)
+    } else {
+      self
+    }
+  }
+}
+
 struct ReaderViewControllerWrapper: UIViewControllerRepresentable {
   let viewController: UIViewController
+  var onTap: ((CGPoint) -> Void)?
   var onPencilDoubleTap: (() -> Void)?
   var onPencilSqueeze: (() -> Void)?
 
   func makeUIViewController(context: Context) -> UIViewController {
+    let coordinator = context.coordinator
+    (viewController as? VisualNavigator)?.addObserver(
+      .activate { [weak viewController] event in
+        guard let view = viewController?.view else { return false }
+        coordinator.onTap?(view.convert(event.location, to: nil))
+        return false
+      }
+    )
+
     if #available(iOS 17.5, *) {
       let interaction = UIPencilInteraction()
       interaction.delegate = context.coordinator
@@ -308,19 +515,22 @@ struct ReaderViewControllerWrapper: UIViewControllerRepresentable {
   }
 
   func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+    context.coordinator.onTap = onTap
     context.coordinator.onDoubleTap = onPencilDoubleTap
     context.coordinator.onSqueeze = onPencilSqueeze
   }
 
   func makeCoordinator() -> Coordinator {
-    Coordinator(onDoubleTap: onPencilDoubleTap, onSqueeze: onPencilSqueeze)
+    Coordinator(onTap: onTap, onDoubleTap: onPencilDoubleTap, onSqueeze: onPencilSqueeze)
   }
 
   final class Coordinator: NSObject, UIPencilInteractionDelegate {
+    var onTap: ((CGPoint) -> Void)?
     var onDoubleTap: (() -> Void)?
     var onSqueeze: (() -> Void)?
 
-    init(onDoubleTap: (() -> Void)?, onSqueeze: (() -> Void)?) {
+    init(onTap: ((CGPoint) -> Void)?, onDoubleTap: (() -> Void)?, onSqueeze: (() -> Void)?) {
+      self.onTap = onTap
       self.onDoubleTap = onDoubleTap
       self.onSqueeze = onSqueeze
     }
@@ -351,10 +561,22 @@ extension EbookReaderView {
     var progress: Double
     var page: (current: Int, total: Int)?
     var chapters: EbookChapterPickerSheet.Model?
+    var chapterProgress: ChapterProgressView.Model?
     var preferences: EbookReaderPreferences
+    var backgroundColor: SwiftUI.Color
+    var textColor: SwiftUI.Color?
+    var cover: EbookCoverView.Model?
     var supportsSettings: Bool
     var search: EbookSearchView.Model?
     var supportsSearch: Bool
+
+    var supportsReadAlong: Bool
+    var readAlong: ReadAlongCoordinator?
+    var catchUpMessage: LocalizedStringResource?
+    var isCatchingUpToNarration: Bool = false
+    var positionSync: PositionSyncSheet.Model?
+    var playerSheet: EbookPlayerSheet.Model?
+    var isFollowingMediaOverlay: Bool = false
 
     func onAppear() {}
     func onDisappear() {}
@@ -367,6 +589,11 @@ extension EbookReaderView {
     func onTapRight() {}
     func onAutoScrollPlayPauseTapped() {}
     func onShowControlsChanged(_ isVisible: Bool) {}
+    func onReaderSizeChanged() {}
+    func onReadAlongTapped() {}
+    func onCatchUpTapped() {}
+    func onCatchUpDismissed(_ scope: PositionSyncOffer.Dismissal) {}
+    func onNowPlayingTapped() {}
 
     init(
       isLoading: Bool = true,
@@ -376,9 +603,11 @@ extension EbookReaderView {
       page: (current: Int, total: Int)? = nil,
       chapters: EbookChapterPickerSheet.Model? = nil,
       preferences: EbookReaderPreferences = EbookReaderPreferences(),
+      backgroundColor: SwiftUI.Color = .clear,
       supportsSettings: Bool = false,
       search: EbookSearchView.Model? = nil,
-      supportsSearch: Bool = false
+      supportsSearch: Bool = false,
+      supportsReadAlong: Bool = false
     ) {
       self.isLoading = isLoading
       self.error = error
@@ -387,9 +616,11 @@ extension EbookReaderView {
       self.page = page
       self.chapters = chapters
       self.preferences = preferences
+      self.backgroundColor = backgroundColor
       self.supportsSettings = supportsSettings
       self.search = search
       self.supportsSearch = supportsSearch
+      self.supportsReadAlong = supportsReadAlong
     }
   }
 }

@@ -13,7 +13,7 @@ struct LibraryPage: View {
       content
         .conditionalSearchable(
           text: $model.search.searchText,
-          prompt: "Search books, series, and authors"
+          prompt: "Search books, series, authors, and narrators"
         )
         .refreshable {
           await model.refresh()
@@ -48,8 +48,8 @@ struct LibraryPage: View {
         }
       }
     }
-    .background(theme.colors.background.page)
-    .navigationTitle(model.isSelecting ? selectionTitle : model.title)
+    .background(theme.colors.background.page.ignoresSafeArea())
+    .navigationTitle(navigationTitle)
     .sheet(isPresented: $model.showingFilterSelection) {
       if let filters = model.filters {
         NavigationStack {
@@ -76,8 +76,8 @@ struct LibraryPage: View {
             model.onFilterButtonTapped()
           } label: {
             Label(
-              filterButtonLabel ?? "All",
-              systemImage: filterButtonLabel == nil
+              model.filters?.selectedFilter?.title ?? "All",
+              systemImage: model.filters?.selectedFilter?.title == nil
                 ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill"
             )
           }
@@ -128,7 +128,25 @@ struct LibraryPage: View {
               }
             )
           ) {
-            Label("List View", systemImage: "rectangle.grid.1x3")
+            Label("List View", systemImage: "rectangle.grid.1x2")
+          }
+
+          if !model.sortOptions.isEmpty {
+            Divider()
+
+            Menu("Sort By") {
+              ForEach(model.sortOptions, id: \.self) { sortBy in
+                if model.currentSort == sortBy {
+                  Button(
+                    sortBy.displayTitle,
+                    systemImage: model.ascending ? "chevron.up" : "chevron.down",
+                    action: { model.onSortOptionTapped(sortBy) }
+                  )
+                } else {
+                  Button(sortBy.displayTitle, action: { model.onSortOptionTapped(sortBy) })
+                }
+              }
+            }
           }
 
           if model.isSelecting {
@@ -180,42 +198,44 @@ struct LibraryPage: View {
             }
           }
 
-          if !model.sortOptions.isEmpty {
+          if showsPlayAction || model.actions.contains(.resetProgress) || model.actions.contains(.markAsFinished) {
             Divider()
-
-            Menu("Sort By") {
-              ForEach(model.sortOptions, id: \.self) { sortBy in
-                if model.currentSort == sortBy {
-                  Button(
-                    sortBy.displayTitle,
-                    systemImage: model.ascending ? "chevron.up" : "chevron.down",
-                    action: { model.onSortOptionTapped(sortBy) }
-                  )
-                } else {
-                  Button(sortBy.displayTitle, action: { model.onSortOptionTapped(sortBy) })
-                }
-              }
-            }
           }
 
-          if model.actions.contains(.resetProgress) || model.actions.contains(.markAsFinished) {
-            Divider()
+          if showsPlayAction {
+            Button(action: hasSelection ? model.onPlaySelectedTapped : model.onPlayAllTapped) {
+              Label(hasSelection ? "Play Selected" : "Play All", systemImage: "play.fill")
+            }
+
+            Button(action: model.onAddToQueueTapped) {
+              Label(
+                hasSelection ? "Queue Selected" : "Queue All",
+                systemImage: "text.badge.plus"
+              )
+            }
           }
 
           if model.actions.contains(.resetProgress) {
             Button(action: model.onResetAllProgressTapped) {
-              Label("Reset All Progress", systemImage: "arrow.counterclockwise")
+              Label(
+                hasSelection ? "Reset Selected Progress" : "Reset All Progress",
+                systemImage: "arrow.counterclockwise"
+              )
             }
           }
 
           if model.actions.contains(.markAsFinished) {
             Button(action: model.onMarkAllFinishedTapped) {
-              Label("Mark All as Finished", systemImage: "checkmark.shield")
+              Label(
+                hasSelection ? "Mark Selected as Finished" : "Mark All as Finished",
+                systemImage: "checkmark.shield"
+              )
             }
           }
         } label: {
           Image(systemName: "ellipsis")
         }
+        .queueChoiceDialog($model.queueChoice, onSelect: model.onQueueChoiceSelected)
         .tint(.primary)
       }
     }
@@ -230,12 +250,20 @@ struct LibraryPage: View {
 
   var libraryView: some View {
     ScrollView {
-      Group {
+      VStack {
+        if let countLabel {
+          countLabel
+            .font(.title2.bold())
+            .foregroundColor(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
         if model.isRoot {
           LibraryView(
             items: model.items,
             displayMode: preferences.libraryDisplayMode == .card ? .grid : .list,
             hasMorePages: model.hasMorePages,
+            pageLoadFailed: model.pageLoadFailed,
             onLoadMore: model.loadNextPageIfNeeded,
             isSelecting: model.isSelecting,
             selectedIDs: model.selectedIDs,
@@ -246,6 +274,7 @@ struct LibraryPage: View {
             items: model.items,
             displayMode: preferences.libraryDisplayMode == .card ? .grid : .list,
             hasMorePages: model.hasMorePages,
+            pageLoadFailed: model.pageLoadFailed,
             onLoadMore: model.loadNextPageIfNeeded,
             isSelecting: model.isSelecting,
             selectedIDs: model.selectedIDs,
@@ -261,7 +290,42 @@ struct LibraryPage: View {
         }
       }
       .padding(.horizontal)
+      .padding(.top)
+      .padding(.bottom, 80)
       .environment(\.itemDisplayMode, preferences.libraryDisplayMode)
+    }
+  }
+
+  var countLabel: Text? {
+    if model.isSelecting {
+      return Text("\(model.selectedIDs.count) of \(model.selectableCount) selected")
+    } else if let total = model.totalCount {
+      switch model.kind {
+      case .books:
+        return Text("^[\(total) book](inflect: true)")
+      case .podcasts:
+        return Text("^[\(total) podcast](inflect: true)")
+      }
+    } else {
+      return nil
+    }
+  }
+
+  var hasSelection: Bool {
+    model.isSelecting && !model.selectedIDs.isEmpty
+  }
+
+  var showsPlayAction: Bool {
+    hasSelection || (model.actions.contains(.playAll) && !model.isSelecting && !model.items.isEmpty)
+  }
+
+  var navigationTitle: String {
+    if model.isRoot {
+      ""
+    } else if model.isSelecting {
+      selectionTitle
+    } else {
+      model.title
     }
   }
 
@@ -272,29 +336,16 @@ struct LibraryPage: View {
       String(localized: "\(model.selectedIDs.count) Selected")
     }
   }
-
-  var filterButtonLabel: String? {
-    switch model.filters?.selectedFilter {
-    case .all: return nil
-    case .explicit: return "Explicit"
-    case .abridged: return "Abridged"
-    case .progress(let name): return name
-    case .authors(_, let name): return name
-    case .series(_, let name): return name
-    case .narrators(let name): return name
-    case .genres(let name): return name
-    case .tags(let name): return name
-    case .languages(let name): return name
-    case .publishers(let name): return name
-    case .publishedDecades(let decade): return decade
-    case nil: return nil
-    }
-  }
 }
 
 extension LibraryPage {
   @Observable
   class Model: ObservableObject {
+    enum Kind {
+      case books
+      case podcasts
+    }
+
     struct Actions: OptionSet {
       let rawValue: Int
 
@@ -302,10 +353,14 @@ extension LibraryPage {
       static let resetProgress = Actions(rawValue: 1 << 1)
       static let addToPlaylist = Actions(rawValue: 1 << 2)
       static let addToCollection = Actions(rawValue: 1 << 3)
+      static let playAll = Actions(rawValue: 1 << 4)
     }
 
     var isLoading: Bool
     var hasMorePages: Bool
+    var pageLoadFailed: Bool = false
+    var totalCount: Int?
+    var kind: Kind = .books
 
     var isRoot: Bool
 
@@ -327,6 +382,7 @@ extension LibraryPage {
     var isSelecting: Bool = false
     var selectedIDs: [String] = []
     var collectionSelector: CollectionSelectorSheet.Model?
+    var queueChoice: QueueChoice?
 
     var selectableCount: Int {
       items.count { if case .book = $0 { true } else { false } }
@@ -340,10 +396,14 @@ extension LibraryPage {
     func onDisplayModeTapped() {}
     func onCollapseSeriesToggled() {}
     func onDownloadAllTapped() {}
+    func onPlayAllTapped() {}
+    func onPlaySelectedTapped() {}
+    func onAddToQueueTapped() {}
+    func onQueueChoiceSelected(_ choice: QueueChoice, scope: QueueChoice.Scope) {}
     func onResetAllProgressTapped() {}
     func onMarkAllFinishedTapped() {}
     func onFilterButtonTapped() {}
-    func onFilterPreferenceChanged(_ filter: LibraryPageModel.Filter) {}
+    func onFilterPreferenceChanged(_ filter: FilterPicker.Model.Filter) {}
     func onSelectTapped() {}
     func onCancelSelectTapped() {}
     func onSelectAllTapped() {}
@@ -413,7 +473,9 @@ extension LibraryPage.Model {
       ),
     ]
 
-    return LibraryPage.Model(items: sampleItems)
+    let model = LibraryPage.Model(items: sampleItems)
+    model.totalCount = sampleItems.count
+    return model
   }
 }
 

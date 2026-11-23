@@ -6,11 +6,12 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
 
   private var fetched: [LibraryView.Item] = []
   private var sortBy: SortBy = .title
-  private var filter: LibraryPageModel.Filter?
+  private var filter: FilterPicker.Model.Filter?
 
   private var currentPage: Int = 0
   private var isLoadingNextPage: Bool = false
   private let itemsPerPage: Int = 100
+  private var loadTask: Task<Void, Never>?
 
   init() {
     let preferences = UserPreferences.shared
@@ -24,7 +25,8 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
       title: "Podcasts"
     )
 
-    self.filters = FilterPickerModel(currentFilter: filter)
+    kind = .podcasts
+    self.filters = FilterPickerModel(currentFilter: filter, source: .podcasts)
   }
 
   init(destination: NavigationDestination) {
@@ -46,18 +48,23 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
     default:
       fatalError("PodcastLibraryPageModel cannot be initialized with a \(destination) destination")
     }
+
+    kind = .podcasts
   }
 
   override func onAppear() {
-    guard fetched.isEmpty else { return }
+    guard fetched.isEmpty, loadTask == nil else { return }
 
-    Task {
+    loadTask = Task {
       await loadPodcasts()
     }
   }
 
   override func refresh() async {
+    loadTask?.cancel()
+    loadTask = nil
     isLoading = true
+    isLoadingNextPage = false
     currentPage = 0
     hasMorePages = true
     fetched.removeAll()
@@ -100,7 +107,8 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
   }
 
   override func loadNextPageIfNeeded() {
-    Task {
+    guard loadTask == nil else { return }
+    loadTask = Task {
       await loadPodcasts()
     }
   }
@@ -114,7 +122,7 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
     showingFilterSelection = true
   }
 
-  override func onFilterPreferenceChanged(_ newFilter: LibraryPageModel.Filter) {
+  override func onFilterPreferenceChanged(_ newFilter: FilterPicker.Model.Filter) {
     let resolved = newFilter == .all ? nil : newFilter
     guard filter != resolved else { return }
 
@@ -148,6 +156,8 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
         let id = name.lowercased().replacingOccurrences(of: " ", with: "-")
         let encoded = Data(id.utf8).base64EncodedString()
         filterString = "progress.\(encoded)"
+      case .explicit:
+        filterString = "explicit"
       case .all, nil:
         filterString = nil
       default:
@@ -162,6 +172,12 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
         filter: filterString
       )
 
+      guard !Task.isCancelled else {
+        isLoadingNextPage = false
+        isLoading = false
+        return
+      }
+
       let newItems: [LibraryView.Item] = response.results.map { podcast in
         .book(PodcastCardModel(podcast, sortBy: sortBy))
       }
@@ -175,8 +191,15 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
       items = fetched
 
       currentPage += 1
+      totalCount = response.total
       hasMorePages = (currentPage * itemsPerPage) < response.total
     } catch {
+      guard !Task.isCancelled else {
+        isLoadingNextPage = false
+        isLoading = false
+        return
+      }
+
       if currentPage == 0 {
         fetched = []
         items = []
@@ -185,5 +208,6 @@ final class PodcastLibraryPageModel: LibraryPage.Model {
 
     isLoadingNextPage = false
     isLoading = false
+    loadTask = nil
   }
 }

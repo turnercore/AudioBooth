@@ -12,14 +12,13 @@ struct AuthorsPage: View {
 
   var body: some View {
     content
-      .background(theme.colors.background.page)
-      .navigationTitle("Authors")
+      .background(theme.colors.background.page.ignoresSafeArea())
       .refreshable {
         await model.refresh()
       }
       .conditionalSearchable(
         text: $model.searchViewModel.searchText,
-        prompt: "Search books, series, and authors"
+        prompt: "Search books, series, authors, and narrators"
       )
       .toolbar { toolbarContent }
       .onAppear(perform: model.onAppear)
@@ -93,6 +92,14 @@ struct AuthorsPage: View {
 
   var authorsList: some View {
     LazyVStack(alignment: .leading, spacing: 0) {
+      if let total = model.totalCount {
+        Text("^[\(total) author](inflect: true)")
+          .font(.title2.bold())
+          .foregroundColor(.primary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal)
+      }
+
       ForEach(model.sections) { section in
         Section {
           ForEach(section.authors, id: \.id) { author in
@@ -107,18 +114,14 @@ struct AuthorsPage: View {
       }
 
       if model.hasMorePages {
-        ProgressView()
-          .frame(maxWidth: .infinity)
-          .padding()
-          .onAppear {
-            model.loadNextPageIfNeeded()
-          }
+        PaginationFooter(hasError: model.pageLoadFailed, onLoadMore: model.loadNextPageIfNeeded)
       }
 
       Color.clear
         .frame(height: 1)
         .id(Self.bottomScrollID)
     }
+    .padding(.vertical)
   }
 
   func authorRow(for author: AuthorCard.Model) -> some View {
@@ -153,7 +156,7 @@ struct AuthorsPage: View {
             .resizable()
             .aspectRatio(contentMode: .fill)
             .frame(width: avatarSize, height: avatarSize)
-            .clipShape(Circle())
+            .clipShape(.circle)
         } else {
           placeholderImage
         }
@@ -180,7 +183,7 @@ struct AuthorsPage: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal)
       .padding(.vertical, 8)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
   }
 }
 
@@ -196,6 +199,8 @@ extension AuthorsPage {
   @Observable class Model: ObservableObject {
     var isLoading: Bool
     var hasMorePages: Bool
+    var pageLoadFailed: Bool = false
+    var totalCount: Int?
     var scrollTarget: ScrollTarget?
 
     struct ScrollTarget: Equatable {
@@ -230,7 +235,7 @@ extension AuthorsPage {
 }
 
 extension AuthorsService.SortBy {
-  var displayTitle: String {
+  var displayTitle: LocalizedStringResource {
     switch self {
     case .name: "First Last"
     case .lastFirst: "Last First"
@@ -288,7 +293,9 @@ extension AuthorsPage.Model {
       ),
     ]
 
-    return AuthorsPage.Model(sections: sections)
+    let model = AuthorsPage.Model(sections: sections)
+    model.totalCount = sections.reduce(0) { $0 + $1.authors.count }
+    return model
   }
 }
 

@@ -46,6 +46,10 @@ final class PodcastEpisodeDetailViewModel: PodcastEpisodeDetailView.Model {
       return
     }
 
+    if let mediaProgress = try? MediaProgress.fetch(bookID: episodeID), mediaProgress.isFinished {
+      mediaProgress.currentTime = 0
+    }
+
     if let localEpisode = try? LocalEpisode.fetch(episodeID: episodeID) {
       playerManager.setCurrent(localEpisode)
     } else if let apiEpisode {
@@ -70,12 +74,12 @@ final class PodcastEpisodeDetailViewModel: PodcastEpisodeDetailView.Model {
           if let progress, let id = progress.id {
             progressID = id
           } else {
-            let apiProgress = try await Audiobookshelf.shared.libraries.fetchMediaProgress(
+            let apiProgress = try await Audiobookshelf.shared.progress.fetch(
               bookID: episodeProgressID
             )
             progressID = apiProgress.id
           }
-          try await Audiobookshelf.shared.libraries.resetBookProgress(progressID: progressID)
+          try await Audiobookshelf.shared.progress.reset(progressID: progressID)
           if let progress {
             try progress.delete()
           }
@@ -83,7 +87,7 @@ final class PodcastEpisodeDetailViewModel: PodcastEpisodeDetailView.Model {
           self.progress = 0
         } else {
           try MediaProgress.markAsFinished(for: episodeID)
-          try await Audiobookshelf.shared.libraries.markAsFinished(bookID: episodeProgressID)
+          try await Audiobookshelf.shared.progress.markAsFinished(bookID: episodeProgressID)
           isCompleted = true
           self.progress = 1.0
         }
@@ -103,17 +107,11 @@ final class PodcastEpisodeDetailViewModel: PodcastEpisodeDetailView.Model {
           Toast(error: "Storage limit reached").show()
           return
         }
-        downloadManager.startDownload(
-          for: episodeID,
-          type: .episode(podcastID: podcastID, episodeID: episodeID),
-          info: .init(
-            title: title,
-            coverURL: coverURL,
-            duration: duration,
-            size: size > 0 ? size : nil,
-            startedAt: Date()
-          )
-        )
+        if let apiEpisode {
+          downloadManager.startDownload(apiEpisode, podcastID: podcastID, coverURL: coverURL)
+        } else if let localEpisode = try? LocalEpisode.fetch(episodeID: episodeID) {
+          downloadManager.startDownload(localEpisode)
+        }
       }
     case .downloading:
       downloadManager.cancelDownload(for: episodeID)

@@ -3,16 +3,188 @@ import Combine
 import Foundation
 import Logging
 import Models
+import SwiftData
+
+nonisolated struct PodcastEpisodeProjectionInput: Sendable {
+  nonisolated struct Chapter: Sendable {
+    let id: Int
+    let start: Double
+    let end: Double
+    let title: String
+  }
+
+  let id: String
+  let title: String
+  let season: String?
+  let episode: String?
+  let publishedAt: Date?
+  let publishedAtMilliseconds: Int64?
+  let duration: Double?
+  let size: Int64?
+  let description: String?
+  let chapters: [Chapter]
+  let apiEpisode: PodcastEpisode?
+
+  init(
+    id: String,
+    title: String,
+    season: String? = nil,
+    episode: String? = nil,
+    publishedAt: Date? = nil,
+    publishedAtMilliseconds: Int64? = nil,
+    duration: Double? = nil,
+    size: Int64? = nil,
+    description: String? = nil,
+    chapters: [Chapter] = [],
+    apiEpisode: PodcastEpisode? = nil
+  ) {
+    self.id = id
+    self.title = title
+    self.season = season
+    self.episode = episode
+    self.publishedAt = publishedAt
+    self.publishedAtMilliseconds = publishedAtMilliseconds
+    self.duration = duration
+    self.size = size
+    self.description = description
+    self.chapters = chapters
+    self.apiEpisode = apiEpisode
+  }
+
+  init(apiEpisode: PodcastEpisode) {
+    self.init(
+      id: apiEpisode.id,
+      title: apiEpisode.title,
+      season: apiEpisode.season,
+      episode: apiEpisode.episode,
+      publishedAtMilliseconds: apiEpisode.publishedAt,
+      duration: apiEpisode.duration,
+      size: apiEpisode.audioTrack?.metadata?.size ?? apiEpisode.size,
+      description: apiEpisode.description,
+      chapters: (apiEpisode.chapters ?? []).map {
+        Chapter(id: $0.id, start: $0.start, end: $0.end, title: $0.title)
+      },
+      apiEpisode: apiEpisode
+    )
+  }
+}
+
+nonisolated struct PodcastEpisodeProjection: Sendable {
+  let id: String
+  let title: String
+  let season: String?
+  let episode: String?
+  let publishedAt: Date?
+  let duration: Double?
+  let size: Int64?
+  let description: String?
+  let summary: String?
+  let chapters: [PodcastEpisodeProjectionInput.Chapter]
+  let apiEpisode: PodcastEpisode?
+}
+
+nonisolated struct PodcastEpisodeProjectionResult: Sendable {
+  let episodes: [PodcastEpisodeProjection]
+  let totalDuration: Double
+}
+
+nonisolated struct LocalPodcastProjectionSnapshot: Sendable {
+  let title: String
+  let author: String?
+  let coverURL: URL?
+  let description: String?
+  let genres: [String]?
+  let language: String?
+  let podcastType: String?
+  let episodes: [PodcastEpisodeProjectionInput]
+}
+
+@ModelActor
+actor LocalPodcastSnapshotReader {
+  func fetch(podcastID: String) throws -> LocalPodcastProjectionSnapshot? {
+    let predicate = #Predicate<LocalPodcast> { podcast in
+      podcast.podcastID == podcastID
+    }
+    var descriptor = FetchDescriptor<LocalPodcast>(predicate: predicate)
+    descriptor.fetchLimit = 1
+    guard let podcast = try modelContext.fetch(descriptor).first else { return nil }
+
+    var coverURL = podcast.coverURL
+    coverURL?.append(queryItems: [URLQueryItem(name: "raw", value: "1")])
+    return LocalPodcastProjectionSnapshot(
+      title: podcast.title,
+      author: podcast.author,
+      coverURL: coverURL,
+      description: podcast.podcastDescription,
+      genres: podcast.genres,
+      language: podcast.language,
+      podcastType: podcast.podcastType,
+      episodes: podcast.episodes.map { localEpisode in
+        PodcastEpisodeProjectionInput(
+          id: localEpisode.episodeID,
+          title: localEpisode.title,
+          season: localEpisode.season,
+          episode: localEpisode.episode,
+          publishedAt: localEpisode.publishedAt,
+          duration: localEpisode.duration,
+          description: localEpisode.episodeDescription,
+          chapters: localEpisode.chapters.map {
+            .init(id: $0.id, start: $0.start, end: $0.end, title: $0.title)
+          }
+        )
+      }
+    )
+  }
+}
+
+nonisolated enum PodcastEpisodeProjector {
+  static func project(_ inputs: [PodcastEpisodeProjectionInput]) throws -> PodcastEpisodeProjectionResult {
+    var totalDuration = 0.0
+    var episodes: [PodcastEpisodeProjection] = []
+    episodes.reserveCapacity(inputs.count)
+
+    for input in inputs {
+      try Task.checkCancellation()
+      let publishedAt =
+        input.publishedAt
+        ?? input.publishedAtMilliseconds.map {
+          Date(timeIntervalSince1970: TimeInterval($0) / 1000)
+        }
+      let chapters = input.chapters.sorted { $0.start < $1.start }
+      totalDuration += input.duration ?? 0
+      episodes.append(
+        PodcastEpisodeProjection(
+          id: input.id,
+          title: input.title,
+          season: input.season,
+          episode: input.episode,
+          publishedAt: publishedAt,
+          duration: input.duration,
+          size: input.size,
+          description: input.description,
+          summary: input.description?.htmlStripped,
+          chapters: chapters,
+          apiEpisode: input.apiEpisode
+        )
+      )
+    }
+
+    return PodcastEpisodeProjectionResult(episodes: episodes, totalDuration: totalDuration)
+  }
+}
 
 final class PodcastDetailsViewModel: PodcastDetailsView.Model {
   private var podcastsService: PodcastsService { Audiobookshelf.shared.podcasts }
   private let playerManager = PlayerManager.shared
   private let downloadManager = DownloadManager.shared
   private var apiEpisodes: [PodcastEpisode] = []
-  private var localPodcast: LocalPodcast?
+  private var hasLocalPodcast = false
   private var cancellables = Set<AnyCancellable>()
   private let episodeID: String?
   private let preferences = UserPreferences.shared
+  private var loadTask: Task<Void, Never>?
+  private var loadGeneration = 0
+  private var didLoadPodcast = false
 
   init(podcastID: String, episodeID: String? = nil) {
     self.episodeID = episodeID
@@ -68,11 +240,28 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
   }
 
   override func onAppear() {
-    guard apiEpisodes.isEmpty else { return }
-    Task {
-      loadLocalPodcast()
+    guard loadTask == nil, !didLoadPodcast else { return }
+    loadGeneration += 1
+    let generation = loadGeneration
+    loadTask = Task { [weak self] in
+      guard let self else { return }
+      await loadLocalPodcast()
+      guard !Task.isCancelled else { return }
       await loadPodcast()
+      if loadGeneration == generation {
+        loadTask = nil
+      }
     }
+  }
+
+  override func onDisappear() {
+    loadGeneration += 1
+    loadTask?.cancel()
+    loadTask = nil
+  }
+
+  isolated deinit {
+    loadTask?.cancel()
   }
 
   override func onPlayEpisode(_ episode: Episode) {
@@ -81,6 +270,10 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
         currentPlayer.onTogglePlaybackTapped()
       }
       return
+    }
+
+    if let mediaProgress = try? MediaProgress.fetch(bookID: episode.id), mediaProgress.isFinished {
+      mediaProgress.currentTime = 0
     }
 
     if let apiEpisode = apiEpisodes.first(where: { $0.id == episode.id }) {
@@ -92,7 +285,7 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
         coverURL: coverURL
       )
       playerManager.play()
-    } else if let localEpisode = localPodcast?.episodes.first(where: { $0.episodeID == episode.id }) {
+    } else if let localEpisode = try? LocalEpisode.fetch(episodeID: episode.id) {
       playerManager.setCurrent(localEpisode)
       playerManager.play()
     }
@@ -101,29 +294,24 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
   override func onDownloadAllEpisodes() {
     let episodes = filteredEpisodes.filter { $0.downloadState == .notDownloaded }
 
-    Task {
-      for episode in episodes {
-        let size = episode.size ?? 0
-        downloadManager.startDownload(
-          for: episode.id,
-          type: .episode(podcastID: podcastID, episodeID: episode.id),
-          info: .init(
-            title: episode.title,
-            coverURL: coverURL,
-            duration: episode.duration,
-            size: size > 0 ? size : nil,
-            startedAt: Date()
-          )
-        )
+    for episode in episodes {
+      if let apiEpisode = apiEpisodes.first(where: { $0.id == episode.id }) {
+        downloadManager.startDownload(apiEpisode, podcastID: podcastID, coverURL: coverURL)
+      } else if let localEpisode = try? LocalEpisode.fetch(episodeID: episode.id) {
+        downloadManager.startDownload(localEpisode)
       }
     }
   }
 
   override func onPlayAllEpisodes() {
-    let episodes = filteredEpisodes
+    let episodes = filteredEpisodes.filter { !$0.isCompleted }
     guard let first = episodes.first else { return }
 
-    onPlayEpisode(first)
+    if playerManager.current?.id != first.id {
+      onPlayEpisode(first)
+    } else if !playerManager.isPlaying {
+      playerManager.play()
+    }
 
     for episode in episodes.dropFirst() {
       playerManager.addToQueue(
@@ -141,14 +329,7 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
   private func observeDownloadStates() {
     downloadManager.$downloadStates
       .sink { [weak self] states in
-        guard let self else { return }
-        for index in episodes.indices {
-          let epID = episodes[index].id
-          let newState = states[epID] ?? .notDownloaded
-          if episodes[index].downloadState != newState {
-            episodes[index].downloadState = newState
-          }
-        }
+        self?.applyDownloadStates(states)
       }
       .store(in: &cancellables)
   }
@@ -183,6 +364,7 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
   }
 
   private func updatePlayingState() {
+    let previouslyPlayingEpisodeID = currentlyPlayingEpisodeID
     let current = playerManager.current
     if current?.podcastID == podcastID {
       currentlyPlayingEpisodeID = current?.id
@@ -191,29 +373,31 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
       currentlyPlayingEpisodeID = nil
       isPlaying = false
     }
-    refreshEpisodeProgress()
-  }
 
-  private func refreshEpisodeProgress() {
-    for index in episodes.indices {
-      let progress = MediaProgress.progress(for: episodes[index].id)
-      let isCompleted = progress >= 1.0
-      if episodes[index].progress != progress || episodes[index].isCompleted != isCompleted {
-        episodes[index].progress = progress
-        episodes[index].isCompleted = isCompleted
-      }
+    let affectedEpisodeIDs = Set(
+      [previouslyPlayingEpisodeID, currentlyPlayingEpisodeID].compactMap { $0 }
+    )
+    for episodeID in affectedEpisodeIDs {
+      refreshEpisodeProgress(for: episodeID)
     }
   }
 
-  private func loadLocalPodcast() {
+  private func refreshEpisodeProgress(for episodeID: String) {
+    applyProgress(MediaProgress.progress(for: episodeID), to: episodeID)
+  }
+
+  private func loadLocalPodcast() async {
     do {
-      guard let podcast = try LocalPodcast.fetch(podcastID: podcastID) else { return }
-      localPodcast = podcast
+      let reader = LocalPodcastSnapshotReader(
+        modelContainer: ModelContextProvider.shared.modelContainer
+      )
+      guard let podcast = try await reader.fetch(podcastID: podcastID) else { return }
+      hasLocalPodcast = true
 
       title = podcast.title
       author = podcast.author
-      coverURL = podcast.coverURL(raw: true)
-      description = podcast.podcastDescription?.replacingOccurrences(of: "\n", with: "<br>")
+      coverURL = podcast.coverURL
+      description = podcast.description?.replacingOccurrences(of: "\n", with: "<br>")
       genres = podcast.genres
       language = podcast.language
       podcastType = podcast.podcastType
@@ -221,69 +405,21 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
       isLoading = false
       scrollToEpisodeID = episodeID
 
-      showCachedEpisodes(podcast)
+      try await showCachedEpisodes(podcast.episodes)
     } catch {
+      if Task.isCancelled { return }
       AppLogger.viewModel.error("Failed to load local podcast: \(error)")
     }
   }
 
-  private func showCachedEpisodes(_ podcast: LocalPodcast) {
-    let localEpisodes = podcast.episodes
+  private func showCachedEpisodes(_ inputs: [PodcastEpisodeProjectionInput]) async throws {
+    let progressByID = episodeProgress(for: inputs.map(\.id))
+    let projection = try await Self.projectEpisodes(inputs)
+    try Task.checkCancellation()
 
-    episodeCount = localEpisodes.count
-
-    let totalDuration = localEpisodes.reduce(0.0) { $0 + $1.duration }
-    if totalDuration > 0 {
-      durationText = Duration.seconds(totalDuration).formatted(
-        .units(allowed: [.hours, .minutes], width: .narrow)
-      )
-    }
-
-    episodes = localEpisodes.map { localEpisode in
-      let progress = MediaProgress.progress(for: localEpisode.episodeID)
-      let downloadState = downloadManager.downloadStates[localEpisode.episodeID] ?? .notDownloaded
-
-      let chapters = localEpisode.orderedChapters.map { chapter in
-        Chapter(
-          id: chapter.id,
-          start: chapter.start,
-          end: chapter.end,
-          title: chapter.title
-        )
-      }
-
-      let contextMenu = PodcastEpisodeContextMenuModel(
-        episodeID: localEpisode.episodeID,
-        podcastID: podcastID,
-        podcastTitle: title,
-        podcastAuthor: author,
-        coverURL: coverURL,
-        episodeTitle: localEpisode.title,
-        episodeDuration: localEpisode.duration,
-        episodeSize: nil,
-        isCompleted: progress >= 1.0,
-        progress: progress
-      )
-      contextMenu.onProgressChanged = { [weak self] in
-        self?.refreshEpisodeProgress()
-      }
-
-      return Episode(
-        id: localEpisode.episodeID,
-        title: localEpisode.title,
-        season: localEpisode.season,
-        episode: localEpisode.episode,
-        publishedAt: localEpisode.publishedAt,
-        duration: localEpisode.duration,
-        size: nil,
-        description: localEpisode.episodeDescription,
-        isCompleted: progress >= 1.0,
-        progress: progress,
-        chapters: chapters,
-        downloadState: downloadState,
-        contextMenu: contextMenu
-      )
-    }
+    episodeCount = projection.episodes.count
+    updateDurationText(totalDuration: projection.totalDuration)
+    episodes = makeEpisodes(projection.episodes, progressByID: progressByID)
 
     episodesLoading = false
   }
@@ -309,82 +445,22 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
       feedURL = podcast.feedURL
 
       apiEpisodes = podcast.media.episodes ?? []
+      let projection = try await Self.projectAPIEpisodes(apiEpisodes)
+      try Task.checkCancellation()
+      let progressByID = episodeProgress(for: projection.episodes.map(\.id))
 
-      episodeCount = apiEpisodes.count
-
-      let totalDuration = apiEpisodes.reduce(0.0) { $0 + ($1.duration ?? 0) }
-      if totalDuration > 0 {
-        durationText = Duration.seconds(totalDuration).formatted(
-          .units(
-            allowed: [.hours, .minutes],
-            width: .narrow
-          )
-        )
-      }
-
-      episodes = apiEpisodes.map { apiEpisode in
-        let publishedAt: Date?
-        if let timestamp = apiEpisode.publishedAt {
-          publishedAt = Date(timeIntervalSince1970: TimeInterval(timestamp) / 1000)
-        } else {
-          publishedAt = nil
-        }
-
-        let chapters = (apiEpisode.chapters ?? []).map { apiChapter in
-          Chapter(
-            id: apiChapter.id,
-            start: apiChapter.start,
-            end: apiChapter.end,
-            title: apiChapter.title
-          )
-        }
-
-        let progress = MediaProgress.progress(for: apiEpisode.id)
-
-        let downloadState = downloadManager.downloadStates[apiEpisode.id] ?? .notDownloaded
-
-        let size = apiEpisode.audioTrack?.metadata?.size ?? apiEpisode.size
-        let contextMenu = PodcastEpisodeContextMenuModel(
-          episodeID: apiEpisode.id,
-          podcastID: podcastID,
-          podcastTitle: title,
-          podcastAuthor: author,
-          coverURL: coverURL,
-          episodeTitle: apiEpisode.title,
-          episodeDuration: apiEpisode.duration,
-          episodeSize: size,
-          isCompleted: progress >= 1.0,
-          progress: progress,
-          apiEpisode: apiEpisode
-        )
-        contextMenu.onProgressChanged = { [weak self] in
-          self?.refreshEpisodeProgress()
-        }
-
-        return Episode(
-          id: apiEpisode.id,
-          title: apiEpisode.title,
-          season: apiEpisode.season,
-          episode: apiEpisode.episode,
-          publishedAt: publishedAt,
-          duration: apiEpisode.duration,
-          size: size,
-          description: apiEpisode.description,
-          isCompleted: progress >= 1.0,
-          progress: progress,
-          chapters: chapters,
-          downloadState: downloadState,
-          contextMenu: contextMenu,
-          apiEpisode: apiEpisode
-        )
-      }
+      episodeCount = projection.episodes.count
+      updateDurationText(totalDuration: projection.totalDuration)
+      episodes = makeEpisodes(projection.episodes, progressByID: progressByID)
 
       error = nil
       isLoading = false
       episodesLoading = false
       scrollToEpisodeID = episodeID
+      didLoadPodcast = true
     } catch {
-      if localPodcast == nil {
+      if Task.isCancelled { return }
+      if !hasLocalPodcast {
         self.error = "Failed to load podcast details. Please check your connection and try again."
       } else if NetworkMonitor.shared.isConnected {
         Toast(error: "Couldn't refresh episodes. Showing downloaded episodes only.").show()
@@ -392,6 +468,85 @@ final class PodcastDetailsViewModel: PodcastDetailsView.Model {
       isLoading = false
       episodesLoading = false
       AppLogger.viewModel.error("Failed to load podcast: \(error)")
+    }
+  }
+
+  private func episodeProgress(for episodeIDs: [String]) -> [String: Double] {
+    Dictionary(uniqueKeysWithValues: episodeIDs.map { ($0, MediaProgress.progress(for: $0)) })
+  }
+
+  private func updateDurationText(totalDuration: Double) {
+    guard totalDuration > 0 else { return }
+    durationText = Duration.seconds(totalDuration).formatted(
+      .units(allowed: [.hours, .minutes], width: .narrow)
+    )
+  }
+
+  private func makeEpisodes(
+    _ projections: [PodcastEpisodeProjection],
+    progressByID: [String: Double]
+  ) -> [Episode] {
+    projections.map { projection in
+      let progress = progressByID[projection.id] ?? 0
+      let contextMenu = PodcastEpisodeContextMenuModel(
+        podcastID: podcastID,
+        podcastTitle: title,
+        podcastAuthor: author,
+        coverURL: coverURL,
+        episode: projection,
+        progress: progress
+      )
+      contextMenu.onProgressChanged = { [weak self, episodeID = projection.id] in
+        self?.refreshEpisodeProgress(for: episodeID)
+      }
+
+      return Episode(
+        id: projection.id,
+        title: projection.title,
+        season: projection.season,
+        episode: projection.episode,
+        publishedAt: projection.publishedAt,
+        duration: projection.duration,
+        size: projection.size,
+        description: projection.description,
+        summary: projection.summary,
+        isCompleted: progress >= 1.0,
+        progress: progress,
+        chapters: projection.chapters.map {
+          Chapter(id: $0.id, start: $0.start, end: $0.end, title: $0.title)
+        },
+        downloadState: downloadManager.downloadStates[projection.id] ?? .notDownloaded,
+        contextMenu: contextMenu,
+        apiEpisode: projection.apiEpisode
+      )
+    }
+  }
+
+  private nonisolated static func projectEpisodes(
+    _ inputs: [PodcastEpisodeProjectionInput]
+  ) async throws -> PodcastEpisodeProjectionResult {
+    let projectionTask = Task.detached(priority: .userInitiated) {
+      try PodcastEpisodeProjector.project(inputs)
+    }
+    return try await withTaskCancellationHandler {
+      try await projectionTask.value
+    } onCancel: {
+      projectionTask.cancel()
+    }
+  }
+
+  private nonisolated static func projectAPIEpisodes(
+    _ episodes: [PodcastEpisode]
+  ) async throws -> PodcastEpisodeProjectionResult {
+    let projectionTask = Task.detached(priority: .userInitiated) {
+      try PodcastEpisodeProjector.project(
+        episodes.map(PodcastEpisodeProjectionInput.init(apiEpisode:))
+      )
+    }
+    return try await withTaskCancellationHandler {
+      try await projectionTask.value
+    } onCancel: {
+      projectionTask.cancel()
     }
   }
 }

@@ -10,8 +10,10 @@ struct ContentView: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.scenePhase) private var scenePhase
 
+  @Namespace private var playerNamespace
   @State private var isKeyboardVisible = false
   @State private var selectedTab: TabSelection = .home
+  @StateObject private var homeModel = HomePageModel()
   @StateObject private var libraryModel = LibraryRootPage.Model()
   @StateObject private var podcastsModel = PodcastsRootPage.Model()
   @StateObject private var collectionsModel = CollectionsRootPage.Model()
@@ -46,12 +48,19 @@ struct ContentView: View {
 
   var body: some View {
     content
-      .adaptivePresentation(isPresented: $playerManager.isShowingFullPlayer) {
+      .observesHinge()
+      .fullScreenCover(isPresented: $playerManager.isShowingFullPlayer) {
         if let currentPlayer = playerManager.current {
-          BookPlayer(model: currentPlayer)
-            .displayScaled()
-            .presentationDetents([.large])
-            .presentationDragIndicator(UIAccessibility.isVoiceOverRunning ? .hidden : .visible)
+          if preferences.assistedPlayer {
+            AssistedPlayer(model: currentPlayer)
+              .displayScaled()
+              .interactiveDismissDisabled()
+          } else {
+            BookPlayer(model: currentPlayer)
+              .displayScaled()
+              .zoomTransition(sourceID: "player", in: playerNamespace)
+              .interactiveDismissDisabled(currentPlayer.isLocked)
+          }
         }
       }
       .fullScreenCover(item: $playerManager.reader) { reader in
@@ -74,6 +83,36 @@ struct ContentView: View {
         PlayerQueueView(model: PlayerQueueViewModel())
           .displayScaled()
       }
+      .adaptiveSheet(
+        isPresented: miniPlayerBinding(
+          get: { $0.speed.isPresented },
+          set: { $0.speed.isPresented = $1 }
+        )
+      ) {
+        if let currentPlayer = playerManager.current {
+          FloatPickerSheet(
+            model: Binding(
+              get: { currentPlayer.speed },
+              set: { currentPlayer.speed = $0 }
+            )
+          )
+        }
+      }
+      .adaptiveSheet(
+        isPresented: miniPlayerBinding(
+          get: { $0.timer.isPresented },
+          set: { $0.timer.isPresented = $1 }
+        )
+      ) {
+        if let currentPlayer = playerManager.current {
+          TimerPickerSheet(
+            model: Binding(
+              get: { currentPlayer.timer },
+              set: { currentPlayer.timer = $0 }
+            )
+          )
+        }
+      }
       .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
         isKeyboardVisible = true
       }
@@ -86,6 +125,22 @@ struct ContentView: View {
           playerManager.showFullPlayer()
         }
       }
+  }
+
+  private func miniPlayerBinding(
+    get: @escaping (BookPlayer.Model) -> Bool,
+    set: @escaping (BookPlayer.Model, Bool) -> Void
+  ) -> Binding<Bool> {
+    Binding(
+      get: {
+        guard let current = playerManager.current, !playerManager.isShowingFullPlayer else { return false }
+        return get(current)
+      },
+      set: { newValue in
+        guard let current = playerManager.current else { return }
+        set(current, newValue)
+      }
+    )
   }
 
   @ViewBuilder
@@ -102,7 +157,7 @@ struct ContentView: View {
   private var modernTabView: some View {
     TabView(selection: tabSelection) {
       Tab("Home", systemImage: "house", value: .home) {
-        HomePage(model: HomePageModel())
+        HomePage(model: homeModel)
       }
 
       if let current = libraries.current {
@@ -134,11 +189,13 @@ struct ContentView: View {
       }
     }
     .tabBarMinimizeBehavior(.onScrollDown)
+    .tabViewSearchActivation(.searchTabSelection)
     .tabViewBottomAccessory {
       Group {
         if let currentPlayer = playerManager.current {
-          MiniBookPlayer(player: currentPlayer)
+          MiniBookPlayer(player: currentPlayer, namespace: playerNamespace)
             .equatable()
+            .id(currentPlayer.id)
         } else {
           HStack(spacing: 12) {
             Image(systemName: "book.circle")
@@ -158,7 +215,7 @@ struct ContentView: View {
   @ViewBuilder
   private var legacyTabView: some View {
     TabView {
-      HomePage(model: HomePageModel())
+      HomePage(model: homeModel)
         .padding(.bottom, 0.5)
         .safeAreaInset(edge: .bottom) { miniPlayer }
         .tabItem {
@@ -215,7 +272,7 @@ struct ContentView: View {
   @ViewBuilder
   private var miniPlayer: some View {
     if let currentPlayer = playerManager.current, !isKeyboardVisible {
-      LegacyMiniBookPlayer(player: currentPlayer)
+      LegacyMiniBookPlayer(player: currentPlayer, namespace: playerNamespace)
         .id(currentPlayer.id)
         .transition(.move(edge: .bottom))
         .animation(.easeInOut(duration: 0.3), value: playerManager.hasActivePlayer)

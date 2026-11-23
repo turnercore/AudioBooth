@@ -25,11 +25,11 @@ struct YearInReviewCard: View {
                   Button {
                     model.onYearChanged(year)
                   } label: {
-                    Text("\(year, format: .number.grouping(.never))")
+                    Text(year.formatted(.number.grouping(.never)))
                   }
                 }
               } label: {
-                Text("\(model.year, format: .number.grouping(.never))")
+                Text(model.year.formatted(.number.grouping(.never)))
                   .font(.subheadline)
                   .fontWeight(.semibold)
                   .foregroundColor(.accentColor)
@@ -53,7 +53,7 @@ struct YearInReviewCard: View {
             .font(.body)
             .foregroundColor(.secondary)
         }
-        .contentShape(Rectangle())
+        .contentShape(.rect)
       }
       .buttonStyle(.plain)
 
@@ -78,7 +78,7 @@ struct YearInReviewCard: View {
       .frame(height: 600)
       .allowsHitTesting(false)
     )
-    .clipShape(RoundedRectangle(cornerRadius: 12))
+    .clipShape(.rect(cornerRadius: 12))
   }
 
   private func statsGrid(stats: YearInReviewStats) -> some View {
@@ -127,7 +127,7 @@ struct YearInReviewCard: View {
     }
   }
 
-  private func statCard(value: String, label: String) -> some View {
+  private func statCard(value: String, label: LocalizedStringResource) -> some View {
     HStack(spacing: 12) {
       VStack(alignment: .center, spacing: 2) {
         Text(value)
@@ -144,10 +144,10 @@ struct YearInReviewCard: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .padding()
     .background(.background.opacity(0.8))
-    .clipShape(RoundedRectangle(cornerRadius: 8))
+    .clipShape(.rect(cornerRadius: 8))
   }
 
-  private func topStatItem(title: String, name: String, time: Double) -> some View {
+  private func topStatItem(title: LocalizedStringResource, name: String, time: Double) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(title)
         .font(.caption)
@@ -166,7 +166,7 @@ struct YearInReviewCard: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding()
     .background(.background.opacity(0.8))
-    .clipShape(RoundedRectangle(cornerRadius: 8))
+    .clipShape(.rect(cornerRadius: 8))
   }
 
   private func formatTime(_ seconds: Double) -> String {

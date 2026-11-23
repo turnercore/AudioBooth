@@ -125,11 +125,11 @@ extension MediaProgress {
   }
 
   func update(from apiProgress: User.MediaProgress) {
-    let values = MediaProgress.remoteValues(from: apiProgress)
+    let values = MediaProgress.remoteValues(from: apiProgress, localDuration: duration)
     let remoteStartedAt = Date(timeIntervalSince1970: TimeInterval(apiProgress.startedAt / 1000))
 
     id = apiProgress.id
-    duration = apiProgress.duration ?? 0
+    duration = values.duration
     startedAt = remoteStartedAt
 
     if finishedAt == nil {
@@ -166,6 +166,9 @@ extension MediaProgress {
     let context = ModelContextProvider.shared.context
     let allLocalProgress = try MediaProgress.fetchAll()
     let remoteBookIDs = Set(userData.mediaProgress.map { $0.episodeId ?? $0.libraryItemId })
+    let pendingSessionBookIDs = Set(
+      (try? PlaybackSession.fetchUnsynced())?.map { $0.episodeID ?? $0.libraryItemID } ?? []
+    )
     var progressMap = Dictionary(uniqueKeysWithValues: allLocalProgress.map { ($0.bookID, $0) })
 
     AppLogger.session.debug(
@@ -187,27 +190,37 @@ extension MediaProgress {
       if let currentPlayingBookID, localProgress.bookID == currentPlayingBookID {
         continue
       }
+      if pendingSessionBookIDs.contains(localProgress.bookID) {
+        continue
+      }
       context.delete(localProgress)
     }
 
     try context.save()
-    MediaProgress.refreshCache()
+    MediaProgress.reloadCache()
   }
 
   private static func remoteValues(
-    from apiProgress: User.MediaProgress
+    from apiProgress: User.MediaProgress,
+    localDuration: TimeInterval = 0
   ) -> (
-    progress: Double, currentTime: TimeInterval, lastUpdate: Date, finishedAt: Date?
+    progress: Double, currentTime: TimeInterval, duration: TimeInterval, lastUpdate: Date, finishedAt: Date?
   ) {
+    let remoteDuration = apiProgress.duration ?? 0
+    let keepsLocalDuration = remoteDuration <= 0 && localDuration > 0 && localDuration.isFinite
+    let duration = keepsLocalDuration ? localDuration : remoteDuration
     var progress = apiProgress.progress
     var currentTime = apiProgress.currentTime
     if apiProgress.isFinished {
       progress = 1.0
-      currentTime = apiProgress.duration ?? 0
+      currentTime = duration
+    } else if keepsLocalDuration {
+      progress = min(1, currentTime / duration)
     }
     return (
       progress,
       currentTime,
+      duration,
       Date(timeIntervalSince1970: TimeInterval(apiProgress.lastUpdate / 1000)),
       apiProgress.finishedAt.map { Date(timeIntervalSince1970: TimeInterval($0 / 1000)) }
     )

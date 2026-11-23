@@ -1,3 +1,4 @@
+import API
 import Nuke
 import SwiftUI
 import WatchKit
@@ -7,9 +8,13 @@ struct AudioBoothWatch: App {
   @WKApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
   init() {
-    configureImagePipeline()
-    DownloadManager.shared.cleanupOrphanedDownloads()
+    ImagePipeline.shared = .watch(customHeaders: Audiobookshelf.shared.authentication.server?.customHeaders)
     _ = WatchConnectivityManager.shared
+    Task { @MainActor in
+      WatchFileTransferReceiver.recoverStagedTransfers()
+      WatchShareDownloadCoordinator.shared.resumePersistedTransfers()
+    }
+    DownloadManager.shared.start()
   }
 
   var body: some Scene {
@@ -17,29 +22,13 @@ struct AudioBoothWatch: App {
       ContentView()
     }
   }
+}
 
-  private func configureImagePipeline() {
-    final class CustomHeaderDataLoader: DataLoading {
-      private let inner: DataLoader
+extension ImagePipeline {
+  nonisolated private static let dataCache = try? DataCache(name: "me.jgrenier.audioBS.watch.images")
 
-      init(inner: DataLoader) {
-        self.inner = inner
-      }
-
-      func loadData(
-        with request: URLRequest,
-        didReceiveData: @escaping @Sendable (Data, URLResponse) -> Void,
-        completion: @escaping @Sendable (Error?) -> Void
-      ) -> any Cancellable {
-        var request = request
-        for (key, value) in WatchConnectivityManager.shared.customHeaders {
-          request.setValue(value, forHTTPHeaderField: key)
-        }
-        return inner.loadData(with: request, didReceiveData: didReceiveData, completion: completion)
-      }
-    }
-
-    ImagePipeline.shared = ImagePipeline {
+  nonisolated static func watch(customHeaders: [String: String]?) -> ImagePipeline {
+    ImagePipeline {
       let config = URLSessionConfiguration.default
       config.timeoutIntervalForResource = 300
       config.timeoutIntervalForRequest = 60
@@ -48,23 +37,41 @@ struct AudioBoothWatch: App {
       config.allowsExpensiveNetworkAccess = true
       config.allowsConstrainedNetworkAccess = true
       config.urlCache = nil
+      config.httpAdditionalHeaders = customHeaders
 
-      $0.dataLoader = CustomHeaderDataLoader(inner: DataLoader(configuration: config))
-      $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.watch.images")
+      $0.dataLoader = DataLoader(configuration: config)
+      $0.dataCache = dataCache
     }
   }
 }
 
 final class AppDelegate: NSObject, WKApplicationDelegate {
+  func applicationDidBecomeActive() {
+    DownloadManager.shared.applicationDidBecomeActive()
+  }
+
   func handle(_ backgroundTasks: Set<WKRefreshBackgroundTask>) {
     for task in backgroundTasks {
       switch task {
       case let urlSessionTask as WKURLSessionRefreshBackgroundTask:
-        DownloadManager.shared.reconnectBackgroundSession(
-          withIdentifier: urlSessionTask.sessionIdentifier
-        ) {
-          urlSessionTask.setTaskCompletedWithSnapshot(false)
+        if urlSessionTask.sessionIdentifier
+          == WatchShareDownloadCoordinator.backgroundSessionIdentifier
+        {
+          WatchShareDownloadCoordinator.shared.reconnectBackgroundSession(
+            withIdentifier: urlSessionTask.sessionIdentifier
+          ) {
+            urlSessionTask.setTaskCompletedWithSnapshot(false)
+          }
+        } else {
+          DownloadManager.shared.reconnectBackgroundSession(
+            withIdentifier: urlSessionTask.sessionIdentifier
+          ) {
+            urlSessionTask.setTaskCompletedWithSnapshot(false)
+          }
         }
+
+      case let connectivityTask as WKWatchConnectivityRefreshBackgroundTask:
+        WatchConnectivityManager.shared.handleBackgroundTask(connectivityTask)
 
       default:
         task.setTaskCompletedWithSnapshot(false)

@@ -1,11 +1,12 @@
 import SwiftUI
 
 struct DownloadsRootPage: View {
+  @Environment(\.isPartiallyFolded) private var isPartiallyFolded
+
   enum DownloadTab: Hashable {
     case downloaded
     case downloading
   }
-  @ObservedObject private var downloadManager = DownloadManager.shared
 
   @State private var selectedTab: DownloadTab = .downloaded
 
@@ -13,7 +14,7 @@ struct DownloadsRootPage: View {
   @StateObject private var downloading = DownloadingListViewModel()
 
   private var hasDownloadingBooks: Bool {
-    !downloadManager.downloadInfos.isEmpty
+    !downloading.books.isEmpty
   }
 
   var body: some View {
@@ -28,7 +29,7 @@ struct DownloadsRootPage: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         if hasDownloadingBooks {
-          ToolbarItem(placement: .principal) {
+          ToolbarItem(placement: isPartiallyFolded ? .topBarLeading : .principal) {
             Picker("Download Tab", selection: $selectedTab) {
               Text("Downloaded").tag(DownloadTab.downloaded)
               Text("Downloading").tag(DownloadTab.downloading)
@@ -37,9 +38,10 @@ struct DownloadsRootPage: View {
             .controlSize(.large)
             .tint(.primary)
           }
+          .sharedBackgroundHidden()
         }
       }
-      .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
+      .navigationDestinations()
     }
     .onChange(of: hasDownloadingBooks) { _, hasDownloading in
       if !hasDownloading {

@@ -60,13 +60,14 @@ extension MediaProgress {
     do {
       let allProgress = try fetchAll()
       return Dictionary(
-        uniqueKeysWithValues: allProgress.map {
+        allProgress.map {
           if $0.progress > 0 {
             return ($0.bookID, $0.progress)
           } else {
             return ($0.bookID, $0.ebookProgress ?? 0)
           }
-        }
+        },
+        uniquingKeysWith: { first, _ in first }
       )
     } catch {
       return [:]
@@ -75,7 +76,7 @@ extension MediaProgress {
 
   public static func progress(for bookID: String) -> Double { cache[bookID, default: 0] }
 
-  public static func refreshCache() {
+  public static func reloadCache() {
     cache = initialize()
   }
 }
@@ -144,7 +145,9 @@ extension MediaProgress {
     -> MediaProgress
   {
     if let existingProgress = try MediaProgress.fetch(bookID: bookID) {
-      existingProgress.duration = duration
+      if duration > 0 {
+        existingProgress.duration = duration
+      }
       return existingProgress
     } else {
       let newProgress = MediaProgress(
@@ -161,13 +164,14 @@ extension MediaProgress {
     for bookID: String,
     currentTime: TimeInterval,
     duration: TimeInterval,
-    progress: Double
+    progress: Double,
+    lastUpdate: Date = Date()
   ) throws {
     if let existingProgress = try MediaProgress.fetch(bookID: bookID) {
       existingProgress.currentTime = currentTime
       existingProgress.duration = duration
       existingProgress.progress = progress
-      existingProgress.lastUpdate = Date()
+      existingProgress.lastUpdate = lastUpdate
       existingProgress.isFinished = progress >= 1.0
       try existingProgress.save()
     } else {
@@ -179,7 +183,7 @@ extension MediaProgress {
         duration: duration,
         progress: progress,
         isFinished: progress >= 1.0,
-        lastUpdate: Date()
+        lastUpdate: lastUpdate
       )
       try newProgress.save()
     }

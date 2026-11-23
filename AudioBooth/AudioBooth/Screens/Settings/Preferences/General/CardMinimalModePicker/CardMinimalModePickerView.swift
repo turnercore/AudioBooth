@@ -51,8 +51,8 @@ extension CardMinimalModePickerView {
           }
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .padding(10)
-          .background(theme.colors.background.page)
-          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+          .background(theme.colors.background.page.ignoresSafeArea())
+          .clipShape(.rect(cornerRadius: 14, style: .continuous))
           .padding(4)
           .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)

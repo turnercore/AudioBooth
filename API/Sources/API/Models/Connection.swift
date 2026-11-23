@@ -27,6 +27,7 @@ public struct Connection: Codable, Sendable {
     self.isUsingAlternativeURL = isUsingAlternativeURL
   }
 
+  @MainActor
   public init(_ server: Server) {
     self.init(
       id: server.id,
@@ -35,7 +36,7 @@ public struct Connection: Codable, Sendable {
       customHeaders: server.customHeaders,
       alias: server.alias,
       alternativeURL: server.alternativeURL,
-      isUsingAlternativeURL: server.isUsingAlternativeURL
+      isUsingAlternativeURL: server.urlMode == .alternative
     )
   }
 
@@ -57,14 +58,14 @@ public struct Connection: Codable, Sendable {
 
 public enum Credentials: Codable, Sendable {
   case legacy(token: String)
-  case bearer(accessToken: String, refreshToken: String, expiresAt: TimeInterval)
+  case bearer(accessToken: String, refreshToken: String, expiresAt: TimeInterval, legacyToken: String?)
   case apiKey(key: String)
 
   public var bearer: String {
     switch self {
     case .legacy(let token):
       return "Bearer \(token)"
-    case .bearer(let accessToken, _, _):
+    case .bearer(let accessToken, _, _, _):
       return "Bearer \(accessToken)"
     case .apiKey(let key):
       return "Bearer \(key)"

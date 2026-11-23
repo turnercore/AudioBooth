@@ -38,6 +38,7 @@ final class WidgetManager {
     self.chapters = chapters
     self.mediaProgress = mediaProgress
     self.playbackProgress = playbackProgress
+    self.lastSyncedTime = mediaProgress.currentTime
 
     player.events
       .sink { [weak self] event in
@@ -52,6 +53,15 @@ final class WidgetManager {
     observeProgressChanges()
     observeChapterChanges()
 
+    watchConnectivity.sendCurrentBook(
+      id: id,
+      title: title,
+      author: author,
+      coverURL: coverURL,
+      duration: mediaProgress.duration,
+      chapterStarts: chapters?.chapters.map(\.start) ?? [],
+      chapterTitles: chapters?.chapters.map(\.title) ?? []
+    )
     update()
     watchConnectivity.sendPlaybackRate(player.rate)
   }
@@ -81,7 +91,13 @@ final class WidgetManager {
       let data = try? JSONEncoder().encode(state)
     {
       sharedDefaults.set(data, forKey: "playbackState")
-      WidgetCenter.shared.reloadAllTimelines()
+      sharedDefaults.set(
+        UserPreferences.shared.timeRemainingAdjustsWithSpeed,
+        forKey: "timeRemainingAdjustsWithSpeed"
+      )
+      for kind in ["AudioBoothWidget", "AudioBoothLockscreenCircular", "AudioBoothLockscreenBook"] {
+        WidgetCenter.shared.reloadTimelines(ofKind: kind)
+      }
     }
 
     let chapterProgress: Double? =
@@ -93,7 +109,7 @@ final class WidgetManager {
         nil
       }
 
-    watchConnectivity.syncProgress(id, chapterProgress: chapterProgress)
+    watchConnectivity.syncProgress(id, chapterProgress: chapterProgress, isPlaying: player?.isPlaybackActive ?? false)
   }
 
   private func observeProgressChanges() {

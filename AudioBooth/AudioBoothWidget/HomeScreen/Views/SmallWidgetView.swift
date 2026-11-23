@@ -18,7 +18,7 @@ struct SmallWidgetView: View {
           .widgetAccentedRenderingMode(.desaturated)
           .aspectRatio(contentMode: .fill)
           .frame(width: 70, height: 70)
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(.rect(cornerRadius: 8))
       } else {
         RoundedRectangle(cornerRadius: 8)
           .fill(Color.gray)
@@ -80,11 +80,12 @@ struct SmallWidgetView: View {
   }
 
   private func formatTime(_ seconds: TimeInterval) -> String {
-    Duration.seconds(seconds).formatted(
+    let time = Duration.seconds(seconds).formatted(
       .units(
         allowed: [.hours, .minutes],
         width: .narrow
       )
-    ) + " left"
+    )
+    return String(localized: "\(time) left")
   }
 }

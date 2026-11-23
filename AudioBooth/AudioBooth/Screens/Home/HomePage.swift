@@ -8,12 +8,18 @@ struct HomePage: View {
   @ObservedObject private var authentication = Audiobookshelf.shared.authentication
   @ObservedObject private var libraries = Audiobookshelf.shared.libraries
   @ObservedObject private var preferences = UserPreferences.shared
+  @ObservedObject private var deepLinkManager = DeepLinkManager.shared
 
   @ScaledMetric(relativeTo: .title) private var cardWidth: CGFloat = 120
   @ScaledMetric(relativeTo: .title) private var authorCardWidth: CGFloat = 80
+  @ScaledMetric(relativeTo: .title) private var posterWidth: CGFloat = 200
 
   private var continueSectionWidth: CGFloat {
     preferences.continueSectionSize.value / 120 * cardWidth
+  }
+
+  private var continueEpisodeWidth: CGFloat {
+    preferences.continueSectionSize.posterWidth / 200 * posterWidth
   }
 
   private var title: Text {
@@ -25,15 +31,17 @@ struct HomePage: View {
     return Text("Home")
   }
 
-  @StateObject var model: Model
+  @ObservedObject var model: Model
   @State private var showingSettings = false
   @State private var showingServerList = false
   @State private var showingServerDetails = false
+  @State private var showingOnboarding = false
+  @State private var didEvaluateStartupPresentation = false
 
   var body: some View {
     NavigationStack {
       content
-        .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
+        .navigationDestinations()
     }
   }
 
@@ -47,7 +55,7 @@ struct HomePage: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .center)
             .background(.red.opacity(0.3))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(.rect(cornerRadius: 12))
             .overlay {
               RoundedRectangle(cornerRadius: 12)
                 .stroke(.red.opacity(0.5), lineWidth: 2)
@@ -68,7 +76,7 @@ struct HomePage: View {
       }
       .padding(.bottom)
     }
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle(title)
     .toolbar {
       serverMenuToolbarItem
@@ -115,32 +123,47 @@ struct HomePage: View {
       ServerListPage(model: ServerListModel())
         .displaySheetScaled()
     }
+    .fullScreenCover(isPresented: $showingOnboarding) {
+      OnboardingView(model: OnboardingViewModel())
+        .displayScaled()
+    }
     .sheet(isPresented: $showingServerDetails) {
-      if let server = authentication.server {
-        NavigationStack {
-          ServerView(model: ServerViewModel(server: server))
-            .toolbar {
-              ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                  showingServerDetails = false
-                } label: {
-                  Label("Close", systemImage: "xmark")
-                }
-                .tint(.primary)
+      NavigationStack {
+        ServerView(model: ServerViewModel(server: authentication.server))
+          .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+              Button {
+                showingServerDetails = false
+              } label: {
+                Label("Close", systemImage: "xmark")
               }
+              .tint(.primary)
             }
-        }
-        .displaySheetScaled()
+          }
+      }
+      .displaySheetScaled()
+    }
+    .onChange(of: deepLinkManager.isImportingConnection) { _, isImporting in
+      if isImporting {
+        showingOnboarding = false
+        showingServerList = false
       }
     }
     .onAppear {
-      if !authentication.isAuthenticated || libraries.current == nil {
-        showingServerList = true
+      if !didEvaluateStartupPresentation {
+        didEvaluateStartupPresentation = true
+        if authentication.servers.isEmpty {
+          showingOnboarding = true
+        } else if !authentication.isAuthenticated || libraries.current == nil {
+          showingServerList = true
+        }
       }
       model.onAppear()
     }
     .onChange(of: libraries.current) { _, new in
       showingServerList = false
+      showingServerDetails = false
+      showingOnboarding = false
       model.onReset(new != nil)
     }
     .onChange(of: preferences.homeSections) { _, _ in
@@ -156,20 +179,44 @@ struct HomePage: View {
 
   private var emptyState: some View {
     VStack(spacing: 16) {
-      Image(systemName: "headphones")
+      Image(systemName: authentication.servers.isEmpty ? "server.rack" : "headphones")
         .font(.system(size: 60))
         .foregroundColor(.gray.opacity(0.6))
 
-      Text("No Content Available")
-        .font(.title2)
-        .fontWeight(.medium)
-        .foregroundColor(.primary)
+      if authentication.servers.isEmpty {
+        Text("No Server Connected")
+          .font(.title2)
+          .fontWeight(.medium)
+          .foregroundColor(.primary)
 
-      Text("Your personalized content will appear here")
+        Text(
+          "AudioBooth plays the audiobooks and podcasts on your Audiobookshelf server. Connect one to start listening."
+        )
         .font(.body)
         .foregroundColor(.secondary)
         .multilineTextAlignment(.center)
         .padding(.horizontal, 32)
+
+        Button {
+          showingServerDetails = true
+        } label: {
+          Text("Connect a Server")
+            .font(.headline)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+      } else {
+        Text("No Content Available")
+          .font(.title2)
+          .fontWeight(.medium)
+          .foregroundColor(.primary)
+
+        Text("Your personalized content will appear here")
+          .font(.body)
+          .foregroundColor(.secondary)
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 32)
+      }
 
       Spacer()
     }
@@ -201,14 +248,19 @@ struct HomePage: View {
               .foregroundColor(.secondary)
           }
           .padding(.horizontal)
-          .contentShape(Rectangle())
+          .contentShape(.rect)
         }
         .buttonStyle(.plain)
 
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(alignment: .top, spacing: 16) {
-            ForEach(items, id: \.id) { book in
-              BookCard(model: book)
+            ForEach(items) { item in
+              switch item {
+              case .book(let model):
+                BookCard(model: model)
+              case .episode(let model):
+                EpisodePoster(model: model)
+              }
             }
           }
           .padding(.horizontal)
@@ -237,6 +289,17 @@ struct HomePage: View {
 
         case .coverFlow:
           ContinueListeningCoverFlowView(model: model)
+
+        case .poster:
+          ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: 16) {
+              ForEach(model.items, id: \.id) { item in
+                BookPoster(model: BookPosterModel(book: item))
+              }
+            }
+            .padding(.horizontal)
+          }
+          .environment(\.posterWidth, continueEpisodeWidth)
         }
 
       case .books(let items):
@@ -256,6 +319,24 @@ struct HomePage: View {
           .padding(.horizontal)
         }
         .environment(\.coverSize, cardWidth)
+
+      case .episodes(let items):
+        Text(section.title)
+          .font(.title2)
+          .fontWeight(.semibold)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal)
+          .accessibilityAddTraits(.isHeader)
+
+        ScrollView(.horizontal, showsIndicators: false) {
+          LazyHStack(alignment: .top, spacing: 16) {
+            ForEach(items) { episode in
+              EpisodePoster(model: episode)
+            }
+          }
+          .padding(.horizontal)
+        }
+        .environment(\.posterWidth, section.id == "continue-listening" ? continueEpisodeWidth : nil)
 
       case .series(let items):
         Text(section.title)
@@ -395,6 +476,8 @@ extension HomePage {
 extension HomePage {
   @Observable
   class Model: ObservableObject {
+    private(set) var hasStarted = false
+
     var isLoading: Bool
     var isRoot: Bool
 
@@ -412,12 +495,25 @@ extension HomePage {
       enum Items {
         case stats
         case continueBooks(ContinueListeningCoverFlowView.Model)
-        case playlist(id: String, items: [BookCard.Model])
+        case playlist(id: String, items: [PlaylistItem])
         case books([BookCard.Model])
+        case episodes([EpisodePoster.Model])
         case series([SeriesCard.Model])
         case authors([AuthorCard.Model])
       }
       let items: Items
+
+      enum PlaylistItem: Identifiable {
+        case book(BookCard.Model)
+        case episode(EpisodePoster.Model)
+
+        var id: String {
+          switch self {
+          case .book(let model): model.id
+          case .episode(let model): model.id
+          }
+        }
+      }
 
       init(id: String, title: String, items: Items) {
         self.id = id
@@ -430,12 +526,22 @@ extension HomePage {
     var dailyGoal: (current: Double, goal: Int)?
     var availableLibraries: [LibraryItem]
 
-    func onAppear() {}
+    final func onAppear() {
+      guard !hasStarted else { return }
+      hasStarted = true
+      start()
+    }
+
+    func start() {}
     func refresh() async {}
     func onReset(_ shouldRefresh: Bool) {}
     func onPreferencesChanged() {}
     func onLibrarySelected(_ id: String) {}
     func onToggleAlternativeURL() {}
+
+    func resetAutomaticLoading() {
+      hasStarted = false
+    }
 
     init(
       isLoading: Bool = false,

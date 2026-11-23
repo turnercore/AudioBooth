@@ -19,6 +19,22 @@ struct PlayerOptionsSheet: View {
         }
       }
 
+      if model.hasBookmarks {
+        Button(action: {
+          model.onBookmarksTapped()
+          dismiss()
+        }) {
+          Label("Bookmarks", systemImage: "bookmark")
+        }
+      }
+
+      Button(action: {
+        model.onPlayOnPhoneTapped()
+        dismiss()
+      }) {
+        Label("Play on iPhone", systemImage: "iphone")
+      }
+
       Button(action: {
         model.onSpeedTapped()
         dismiss()
@@ -30,16 +46,34 @@ struct PlayerOptionsSheet: View {
       }
 
       Button(action: {
+        model.onTimerTapped()
+        dismiss()
+      }) {
+        Label("Sleep Timer", systemImage: "moon.zzz")
+      }
+
+      Button(action: {
         model.onDownloadTapped()
         dismiss()
       }) {
         switch model.downloadState {
         case .downloading:
           Label("Cancel Download", systemImage: "stop.circle")
+        case .paused:
+          Label("Resume Download", systemImage: "arrow.clockwise.icloud")
         case .downloaded:
           Label("Remove from Watch", systemImage: "trash")
         case .notDownloaded:
-          Label("Download to Watch", systemImage: "icloud.and.arrow.down")
+          Label("Download", systemImage: "icloud.and.arrow.down")
+        }
+      }
+
+      if case .paused = model.downloadState {
+        Button(action: {
+          model.onRemoveDownloadTapped()
+          dismiss()
+        }) {
+          Label("Remove from Watch", systemImage: "trash")
         }
       }
 
@@ -71,6 +105,16 @@ extension PlayerOptionsSheet {
     var downloadState: DownloadManager.DownloadState
     var speed: Float
     var speedPicker: SpeedPickerSheet.Model
+    var timer: TimerPickerSheet.Model
+    var bookmarks: BookmarksSheet.Model
+    var hasBookmarks: Bool = false
+
+    var isCoverDownloadEnabled: Bool {
+      switch downloadState {
+      case .notDownloaded, .paused: true
+      case .downloading, .downloaded: false
+      }
+    }
 
     init(
       isHidden: Bool = false,
@@ -83,12 +127,22 @@ extension PlayerOptionsSheet {
       self.downloadState = downloadState
       self.speed = speed
       self.speedPicker = SpeedPickerSheet.Model(speed: speed)
+      self.timer = TimerPickerSheet.Model()
+      self.bookmarks = BookmarksSheet.Model()
     }
 
     func onChaptersTapped() {}
     func onDownloadTapped() {}
+    func onRemoveDownloadTapped() {}
+    func onPlayOnPhoneTapped() {}
     func onSpeedTapped() {
       speedPicker.isPresented = true
+    }
+    func onTimerTapped() {
+      timer.isPresented = true
+    }
+    func onBookmarksTapped() {
+      bookmarks.isPresented = true
     }
   }
 }

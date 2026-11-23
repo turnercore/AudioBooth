@@ -1,4 +1,5 @@
 import Combine
+import Logging
 import NukeUI
 import SwiftUI
 
@@ -35,6 +36,11 @@ struct Cover: View {
         placeholder
       }
     }
+    .onCompletion { result in
+      if case .failure(let error) = result {
+        AppLogger.general.warning("Cover image request failed: \(error)")
+      }
+    }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .aspectRatio(effectiveStyle == .standard ? 1 : nil, contentMode: .fit)
     .background {
@@ -53,7 +59,7 @@ struct Cover: View {
       ProgressOverlay(progress: model.progress)
         .padding(size.progressPadding)
     }
-    .clipShape(RoundedRectangle(cornerRadius: preferences.cardCoverCornerRadius.value))
+    .clipShape(.rect(cornerRadius: preferences.cardCoverCornerRadius.value))
     .overlay {
       RoundedRectangle(cornerRadius: preferences.cardCoverCornerRadius.value)
         .strokeBorder(Color.gray.opacity(0.6), lineWidth: preferences.cardCoverBorderWidth.value)

@@ -38,15 +38,22 @@ final class BookPlayerModel: BookPlayer.Model {
   private var isRecovering = false
   private var recoveryPlaybackStartedAt: Date?
   private var lastAirPlayRouteAt: Date?
-  private var interruptionBeganAt: Date?
+  private var interruption: (beganAt: Date, wasRouteDisconnect: Bool)?
+  private var positionedAt: Date?
+  private var positionSyncCheck: Task<Void, Never>?
+  private var positionSyncShownAt: TimeInterval?
+
+  private static let secondsOfListeningBeforeDismissing: TimeInterval = 30
   private var volumeObservation: NSKeyValueObservation?
   private var hasPlayedThisSession = false
   private var hasRecordedCompletion = false
+  private var narrationProgressSync: NarrationProgressSync?
 
   init(_ book: Book) {
     self.item = nil
     do {
-      self.mediaProgress = try MediaProgress.getOrCreate(for: book.id, duration: book.duration)
+      let duration = book.duration > 0 ? book.duration : (try? LocalBook.fetch(bookID: book.id))?.duration ?? 0
+      self.mediaProgress = try MediaProgress.getOrCreate(for: book.id, duration: duration)
     } catch {
       fatalError("Failed to create MediaProgress for book \(book.id): \(error)")
     }
@@ -80,6 +87,8 @@ final class BookPlayerModel: BookPlayer.Model {
     )
 
     setupDownloadStateBinding(bookID: book.id)
+    setupPageMatch()
+    refreshPositionSyncOffer()
     setupHistory()
 
     onLoad()
@@ -122,6 +131,8 @@ final class BookPlayerModel: BookPlayer.Model {
     )
 
     setupDownloadStateBinding(bookID: item.bookID)
+    setupPageMatch()
+    refreshPositionSyncOffer()
     setupHistory()
 
     onLoad()
@@ -141,7 +152,8 @@ final class BookPlayerModel: BookPlayer.Model {
       id: episode.episodeID,
       title: episode.title,
       author: episode.podcast?.author,
-      coverURL: episode.coverURL,
+      podcastTitle: episode.podcast?.title,
+      coverURL: episode.coverURL(raw: true),
       current: mediaProgress.currentTime,
       duration: mediaProgress.duration
     )
@@ -150,7 +162,7 @@ final class BookPlayerModel: BookPlayer.Model {
       id: episode.episodeID,
       title: episode.title,
       author: episode.podcast?.author,
-      coverURL: episode.coverURL
+      coverURL: episode.coverURL()
     )
 
     super.init(
@@ -199,6 +211,7 @@ final class BookPlayerModel: BookPlayer.Model {
       id: episode.id,
       title: episode.title,
       author: podcastAuthor,
+      podcastTitle: podcastTitle,
       coverURL: coverURL,
       current: mediaProgress.currentTime,
       duration: mediaProgress.duration
@@ -234,6 +247,15 @@ final class BookPlayerModel: BookPlayer.Model {
     onLoad()
   }
 
+  isolated deinit {
+    itemObservation?.cancel()
+    positionSyncCheck?.cancel()
+  }
+
+  override var secondsFromStartOfBook: TimeInterval {
+    player?.time ?? mediaProgress.currentTime
+  }
+
   override func onTogglePlaybackTapped() {
     if isPlaying {
       onPauseTapped()
@@ -244,29 +266,21 @@ final class BookPlayerModel: BookPlayer.Model {
 
   override func onPauseTapped() {
     pendingPlay = false
-    interruptionBeganAt = nil
+    interruption = nil
     player?.pause()
   }
 
   override func onPlayTapped() {
-    if userPreferences.shakeSensitivity.isEnabled,
-      let timer = timer as? TimerPickerSheetViewModel,
-      let completedAlert = timer.completedAlert,
-      !completedAlert.isExpired
-    {
-      completedAlert.onExtendTapped()
-      return
-    }
+    if timer.extendIfNeeded() { return }
+    (timer as? TimerPickerSheetViewModel)?.onPlaybackResumeRequested()
 
-    guard let player, !isLoading, !isRecovering else {
+    guard player != nil, !isLoading, !isRecovering else {
       pendingPlay = true
       return
     }
 
-    if mediaProgress.isFinished || mediaProgress.remaining <= 1 {
-      let newTime = max(0, mediaProgress.currentTime - 15)
-      mediaProgress.currentTime = newTime
-      player.seek(to: newTime)
+    if mediaProgress.remaining <= 1 {
+      return
     }
 
     isLoading = true
@@ -282,7 +296,10 @@ final class BookPlayerModel: BookPlayer.Model {
 
           if isPlayerUsingRemoteURL() {
             AppLogger.player.info("Player using remote URLs, reloading with new session")
+            pendingPlay = false
             reloadPlayer()
+            isLoading = false
+            resumePlayback()
           } else {
             AppLogger.player.info("Player using local files, no reload needed")
             isLoading = false
@@ -292,6 +309,7 @@ final class BookPlayerModel: BookPlayer.Model {
           AppLogger.player.error("Failed to recreate session: \(error)")
           isLoading = false
           pendingPlay = false
+          guard playerManager.current === self else { return }
           Toast(error: "Couldn't reconnect. Please try again.").show()
         }
       }
@@ -312,15 +330,29 @@ final class BookPlayerModel: BookPlayer.Model {
     hasPlayedThisSession = true
 
     lastSyncedTime = mediaProgress.currentTime
-    configureAudioSession()
-    try? audioSession.setActive(true)
     player.resume()
+
+    if userPreferences.pauseAtZeroVolume, audioSession.outputVolume == 0 {
+      raiseVolumeOrPause()
+    }
 
     if let timerViewModel = timer as? TimerPickerSheetViewModel {
       timerViewModel.activateAutoTimerIfNeeded()
     }
 
     pendingPlay = false
+  }
+
+  private func raiseVolumeOrPause() {
+    AppLogger.player.info("Playback started with volume at 0, raising system volume")
+    MPVolumeView.setSystemVolume(0.3)
+
+    Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(500))
+      guard let self, self.audioSession.outputVolume == 0 else { return }
+      AppLogger.player.info("Volume still at 0 after raising, pausing playback")
+      self.onPauseTapped()
+    }
   }
 
   override func onSkipForwardTapped(seconds: Double) {
@@ -349,6 +381,190 @@ final class BookPlayerModel: BookPlayer.Model {
     return Int(ceil(player.time))
   }
 
+  override func onPageMatchTapped() {
+    guard let localBook = try? LocalBook.fetch(bookID: id) else {
+      Toast(error: String(localized: "This audiobook isn't available on this device yet.")).show()
+      return
+    }
+
+    let model = PageMatchViewModel(context: BookSyncContext(localBook: localBook))
+    model.onFinished = { [weak self] in
+      self?.pageMatch = nil
+    }
+    pageMatch = model
+  }
+
+  private func setupPageMatch() {
+    guard #available(iOS 26.0, *), PageScannerView.isSupported else { return }
+    supportsPageMatch = true
+  }
+
+  override func onPositionSyncOfferAccepted() {
+    onPositionSyncTapped()
+  }
+
+  override func onPositionSyncTapped() {
+    positionSyncMessage = nil
+    positionSyncShownAt = nil
+
+    guard let localBook = try? LocalBook.fetch(bookID: id) else {
+      Toast(error: String(localized: "This audiobook isn't available on this device yet.")).show()
+      return
+    }
+
+    let model = PositionSyncViewModel(context: BookSyncContext(localBook: localBook))
+    model.onFinished = { [weak self] in
+      self?.positionSync = nil
+    }
+    positionSync = model
+  }
+
+  override func onPositionSyncDismissed(_ scope: PositionSyncOffer.Dismissal) {
+    positionSyncMessage = nil
+    positionSyncShownAt = nil
+    positionSyncCheck?.cancel()
+
+    guard let ebookProgress = mediaProgress.ebookProgress else { return }
+    PositionSyncOffer.dismiss(.toAudiobook, bookID: id, at: ebookProgress, scope: scope)
+  }
+
+  override func onAppear() {
+    refreshPositionSyncOffer()
+  }
+
+  private func refreshPositionSyncOffer() {
+    guard #available(iOS 26.0, *) else { return }
+
+    guard positionSyncMessage == nil, positionSyncCheck == nil,
+      UIApplication.shared.applicationState == .active
+    else {
+      return
+    }
+
+    guard playerManager.reader?.readAlong?.status.isActive != true else {
+      AppLogger.readAlong.info("Catch Up: Read Along is running, leaving the narration session alone")
+      return
+    }
+
+    guard let context = pendingPositionSyncOffer() else { return }
+
+    positionSyncCheck = Task { [weak self] in
+      defer { self?.positionSyncCheck = nil }
+      await self?.verifyPositionSyncOffer(context)
+    }
+  }
+
+  private func dismissPositionSyncIfListeningOn(at time: TimeInterval) {
+    guard positionSyncMessage != nil, let shown = positionSyncShownAt else { return }
+    guard time - shown >= Self.secondsOfListeningBeforeDismissing else { return }
+
+    positionSyncMessage = nil
+    positionSyncShownAt = nil
+
+    guard let ebookProgress = mediaProgress.ebookProgress else { return }
+    PositionSyncOffer.dismiss(.toAudiobook, bookID: id, at: ebookProgress)
+    AppLogger.readAlong.info("Catch Up: dismissed, you kept listening from here")
+  }
+
+  private func updateNarrationProgress() {
+    if narrationProgressSync == nil, let localBook = item as? LocalBook {
+      narrationProgressSync = NarrationProgressSync(book: localBook, mediaProgress: mediaProgress)
+    }
+    narrationProgressSync?.update()
+  }
+
+  private func pendingPositionSyncOffer() -> BookSyncContext? {
+    guard UserPreferences.shared.positionSyncOffers,
+      (try? LocalBook.fetch(bookID: id))?.hasImportedNarration != true
+    else {
+      return nil
+    }
+
+    guard let ebookProgress = mediaProgress.ebookProgress else {
+      AppLogger.readAlong.info("Catch Up: no ebook progress recorded for \(self.id)")
+      return nil
+    }
+
+    let ebook: String = String(format: "%.4f", ebookProgress)
+    let audio: String = String(format: "%.4f", mediaProgress.progress)
+    let written: String = "\(mediaProgress.lastUpdate)"
+    AppLogger.readAlong.info(
+      "Catch Up: ebook \(ebook), audio \(audio) at \(Int(self.mediaProgress.currentTime))s, written \(written)"
+    )
+
+    guard
+      PositionSyncOffer.needsCheck(
+        .toAudiobook,
+        bookID: id,
+        audioTime: mediaProgress.currentTime,
+        ebookProgress: ebookProgress
+      )
+    else {
+      AppLogger.readAlong.info("Catch Up: neither position has moved since the last check")
+      return nil
+    }
+
+    if let dismissal = PositionSyncOffer.dismissal(
+      .toAudiobook,
+      bookID: id,
+      at: ebookProgress,
+      duration: mediaProgress.duration
+    ) {
+      AppLogger.readAlong.info(
+        "Catch Up: suppressed, already synced or dismissed for scope '\(dismissal.rawValue)'"
+      )
+      return nil
+    }
+
+    guard let localBook = try? LocalBook.fetch(bookID: id) else { return nil }
+    let context = BookSyncContext(localBook: localBook)
+
+    guard context.hasEbook else {
+      AppLogger.readAlong.info("Catch Up: the ebook is not downloaded")
+      return nil
+    }
+
+    guard context.isDownloaded else {
+      AppLogger.readAlong.info("Catch Up: the audiobook is not fully downloaded")
+      return nil
+    }
+
+    return context
+  }
+
+  @available(iOS 26.0, *)
+  private func verifyPositionSyncOffer(_ context: BookSyncContext) async {
+    let alignment = await PositionSyncCheck.measure(
+      context: context,
+      audioTime: mediaProgress.currentTime
+    )
+    guard !Task.isCancelled else { return }
+
+    if let ebookProgress = mediaProgress.ebookProgress {
+      PositionSyncOffer.recordCheck(
+        .toAudiobook,
+        bookID: id,
+        audioTime: mediaProgress.currentTime,
+        ebookProgress: ebookProgress
+      )
+    }
+
+    guard let alignment else {
+      AppLogger.readAlong.info("Catch Up: the narration could not be placed in the ebook")
+      return
+    }
+
+    guard alignment.isEbookAhead else {
+      AppLogger.readAlong.info("Catch Up: the audiobook is already where you stopped reading")
+      return
+    }
+
+    let ahead: String = Duration.seconds(alignment.seconds(over: context.duration))
+      .formatted(.units(allowed: [.hours, .minutes], width: .wide))
+    positionSyncMessage = "You've read about \(ahead) further than you've listened."
+    positionSyncShownAt = mediaProgress.currentTime
+  }
+
   override func onHistoryTapped() {
     history?.isPresented = true
   }
@@ -374,17 +590,7 @@ final class BookPlayerModel: BookPlayer.Model {
         downloadManager.deleteEpisodeDownload(episodeID: episode.episodeID, podcastID: podcast.podcastID)
       case .notDownloaded:
         downloadState = .downloading(progress: 0)
-        downloadManager.startDownload(
-          for: episode.episodeID,
-          type: .episode(podcastID: podcast.podcastID, episodeID: episode.episodeID),
-          info: .init(
-            title: title,
-            coverURL: coverURL,
-            duration: episode.duration,
-            size: episode.track?.size,
-            startedAt: Date()
-          )
-        )
+        downloadManager.startDownload(episode)
       }
     }
   }
@@ -394,11 +600,14 @@ extension BookPlayerModel {
   func seekToTime(_ time: TimeInterval) {
     guard let player else {
       pendingSeekTime = time
+      positionedAt = Date()
+      moveProgress(to: time)
       AppLogger.player.debug("Player not ready, storing pending seek to \(time)s")
       return
     }
 
-    mediaProgress.currentTime = time
+    positionedAt = Date()
+    moveProgress(to: time)
 
     player.seek(to: time)
     AppLogger.player.debug("Seeked to position: \(time)s")
@@ -408,13 +617,19 @@ extension BookPlayerModel {
     PlaybackHistory.record(itemID: id, action: .seek, position: time)
   }
 
+  func moveProgress(to time: TimeInterval) {
+    mediaProgress.currentTime = time
+
+    guard mediaProgress.duration > 0, mediaProgress.duration.isFinite else { return }
+    mediaProgress.progress = time / mediaProgress.duration
+  }
+
   func stopPlayer() {
+    hasRecordedCompletion = true
     player?.stop()
     player = nil
 
     PlaybackHistory.record(itemID: id, action: .pause, position: mediaProgress.currentTime)
-
-    try? audioSession.setActive(false)
 
     volumeObservation?.invalidate()
     volumeObservation = nil
@@ -438,7 +653,7 @@ extension BookPlayerModel {
     )
 
     if let pendingSeekTime {
-      mediaProgress.currentTime = pendingSeekTime
+      moveProgress(to: pendingSeekTime)
       self.pendingSeekTime = nil
       AppLogger.player.info("Using pending seek time: \(pendingSeekTime)s")
     }
@@ -487,6 +702,8 @@ extension BookPlayerModel {
   }
 
   private static let smartRewindCeiling: TimeInterval = 3600
+  private static let deliberateSeekGrace: TimeInterval = 5
+  private static let sessionStartMinimumPause: TimeInterval = 60
 
   private func smartRewindInterval(for reason: SmartRewindReason) -> TimeInterval {
     let prefs = UserPreferences.shared
@@ -504,11 +721,19 @@ extension BookPlayerModel {
     case .onInterruption:
       return prefs.smartRewindOnInterruptionInterval
     case .sessionStart:
+      let pause = Date().timeIntervalSince(mediaProgress.lastPlayedAt)
+      guard pause >= Swift.min(prefs.smartRewindAfterPauseThreshold, Self.sessionStartMinimumPause) else { return 0 }
       return prefs.smartRewindMaxInterval
     }
   }
 
   private func applySmartRewind(reason: SmartRewindReason) {
+    if let positionedAt, Date().timeIntervalSince(positionedAt) < Self.deliberateSeekGrace {
+      self.positionedAt = nil
+      AppLogger.player.debug("Smart rewind not applied - the position was chosen deliberately")
+      return
+    }
+
     guard !mediaProgress.isFinished else {
       AppLogger.player.debug("Smart rewind not applied - book is completed")
       return
@@ -542,7 +767,7 @@ extension BookPlayerModel {
       return
     }
 
-    mediaProgress.currentTime = newTime
+    moveProgress(to: newTime)
     mediaProgress.lastPlayedAt = Date()
 
     player?.seek(to: newTime)
@@ -572,6 +797,13 @@ extension BookPlayerModel {
         AppLogger.player.error("Background session fetch failed: \(error)")
       }
 
+      guard playerManager.current === self else {
+        isLoading = false
+        return
+      }
+
+      await resolveMissingDuration()
+
       if player == nil {
         do {
           try setupAudioPlayer()
@@ -591,80 +823,13 @@ extension BookPlayerModel {
     Task {
       let request = ImageRequest(url: coverURL)
       guard let image = try? await ImagePipeline.shared.image(for: request),
-        let uiColor = image.averageColor
+        let palette = image.coverPalette
       else { return }
       withAnimation(.easeIn(duration: 0.5)) {
-        self.backgroundColor = Color(uiColor)
+        self.backgroundColor = Color(palette.background)
+        self.secondaryBackgroundColor = Color(palette.secondary)
+        self.progressTint = palette.accent.map(Color.init)
       }
-    }
-  }
-
-  private func autoDownloadIfNeeded() {
-    guard episodeID == nil else { return }
-
-    let mode = userPreferences.autoDownloadBooks
-
-    guard let item, !item.isDownloaded, mode != .off else { return }
-
-    let networkMonitor = NetworkMonitor.shared
-
-    let shouldAutoDownload: Bool
-    switch mode {
-    case .off:
-      return
-    case .wifiOnly:
-      shouldAutoDownload = networkMonitor.interfaceType == .wifi
-    case .wifiAndCellular:
-      shouldAutoDownload = networkMonitor.isConnected
-    }
-
-    guard shouldAutoDownload else {
-      AppLogger.player.debug("Auto-download skipped (mode: \(mode.rawValue))")
-      return
-    }
-
-    let delay = userPreferences.autoDownloadDelay
-    if delay == .none, let localBook = item as? LocalBook {
-      AppLogger.player.info("Auto-download starting (mode: \(mode.rawValue))")
-      try? localBook.download()
-    } else {
-      AppLogger.player.info("Auto-download will start after \(delay.displayName) of listening")
-    }
-  }
-
-  private func checkAutoDownloadAfterListening() {
-    guard episodeID == nil else { return }
-
-    let mode = userPreferences.autoDownloadBooks
-    let delay = userPreferences.autoDownloadDelay
-
-    guard let item,
-      !item.isDownloaded,
-      mode != .off,
-      delay != .none,
-      !downloadManager.isDownloading(for: id),
-      let session = sessionManager.current
-    else { return }
-
-    let listeningSeconds = Int(session.timeListening + session.pendingListeningTime)
-    guard listeningSeconds >= delay.rawValue else { return }
-
-    let networkMonitor = NetworkMonitor.shared
-    let shouldDownload: Bool
-    switch mode {
-    case .off:
-      return
-    case .wifiOnly:
-      shouldDownload = networkMonitor.interfaceType == .wifi
-    case .wifiAndCellular:
-      shouldDownload = networkMonitor.isConnected
-    }
-
-    guard shouldDownload else { return }
-
-    AppLogger.player.info("Auto-download starting after \(listeningSeconds)s of listening")
-    if let localBook = item as? LocalBook {
-      try? localBook.download()
     }
   }
 
@@ -725,6 +890,7 @@ extension BookPlayerModel {
 
     chapters = ChapterPickerSheetViewModel(
       itemID: id,
+      podcastID: podcastID,
       chapters: resolvedChapters,
       mediaProgress: mediaProgress,
       player: player
@@ -739,8 +905,6 @@ extension BookPlayerModel {
         speed: speed
       )
     }
-
-    configureAudioSession()
 
     nowPlaying.configure(
       player: player,
@@ -763,6 +927,10 @@ extension BookPlayerModel {
 
     do {
       if let existingItem = try LocalBook.fetch(bookID: id) {
+        if existingItem.isDownloaded, existingItem.tracks.contains(where: { $0.localPath == nil }) {
+          AppLogger.player.warning("Downloaded files are missing, removing download")
+          downloadManager.deleteDownload(for: id)
+        }
         self.item = existingItem
         AppLogger.player.debug(
           "Found existing progress: \(self.mediaProgress.currentTime)s"
@@ -785,6 +953,30 @@ extension BookPlayerModel {
     }
   }
 
+  private func resolveMissingDuration() async {
+    guard let session = sessionManager.current,
+      session.tracks.count == 1,
+      let track = session.tracks.first,
+      track.duration <= 0,
+      let url = session.url(for: track),
+      url.isFileURL,
+      let duration = try? await AVURLAsset(url: url).load(.duration).seconds,
+      duration.isFinite,
+      duration > 0
+    else { return }
+
+    AppLogger.player.info("Resolved missing duration from local file: \(duration)s")
+    track.duration = duration
+
+    if let localEpisode = item as? LocalEpisode, localEpisode.duration <= 0 {
+      localEpisode.duration = duration
+    }
+
+    if mediaProgress.duration <= 0 {
+      mediaProgress.duration = duration
+    }
+  }
+
   private func isPlayerUsingRemoteURL() -> Bool {
     player?.isUsingRemoteURLs == true
   }
@@ -802,13 +994,61 @@ extension BookPlayerModel {
     player.volume = Float(userPreferences.volumeLevel)
 
     if pendingPlay {
-      configureAudioSession()
-      try? audioSession.setActive(true)
       player.resume()
       pendingPlay = false
     }
 
     AppLogger.player.info("Restored playback position and state after reload")
+  }
+}
+
+extension BookPlayerModel {
+  private func startAutoDownload() {
+    if let localBook = item as? LocalBook {
+      try? localBook.download()
+    } else if let episode = item as? LocalEpisode {
+      downloadManager.startDownload(episode)
+    }
+  }
+
+  private func autoDownloadIfNeeded() {
+    let mode = userPreferences.autoDownloadBooks
+
+    guard let item, !item.isDownloaded, mode != .off else { return }
+
+    guard mode.isNetworkAllowed else {
+      AppLogger.player.debug("Auto-download skipped (mode: \(mode.rawValue))")
+      return
+    }
+
+    let delay = userPreferences.autoDownloadDelay
+    if delay == .none {
+      AppLogger.player.info("Auto-download starting (mode: \(mode.rawValue))")
+      startAutoDownload()
+    } else {
+      AppLogger.player.info("Auto-download will start after \(delay.displayName) of listening")
+    }
+  }
+
+  private func checkAutoDownloadAfterListening() {
+    let mode = userPreferences.autoDownloadBooks
+    let delay = userPreferences.autoDownloadDelay
+
+    guard let item,
+      !item.isDownloaded,
+      mode != .off,
+      delay != .none,
+      !downloadManager.isDownloading(for: id),
+      let session = sessionManager.current
+    else { return }
+
+    let listeningSeconds = Int(session.timeListening + session.pendingListeningTime)
+    guard listeningSeconds >= delay.rawValue else { return }
+
+    guard mode.isNetworkAllowed else { return }
+
+    AppLogger.player.info("Auto-download starting after \(listeningSeconds)s of listening")
+    startAutoDownload()
   }
 }
 
@@ -842,8 +1082,8 @@ extension BookPlayerModel {
       guard let self else { return }
 
       RunLoop.main.perform {
-        if !self.isPlaying {
-          self.player?.seek(to: self.mediaProgress.currentTime)
+        if !self.isPlaying, let player = self.player, !player.isPositioned(at: self.mediaProgress.currentTime) {
+          player.seek(to: self.mediaProgress.currentTime)
         }
         self.observeMediaProgress()
       }
@@ -874,7 +1114,7 @@ extension BookPlayerModel {
             self.handlePlaybackStateChange(false)
             self.isLoading = false
             self.recoveryPlaybackStartedAt = nil
-            (self.timer as? TimerPickerSheetViewModel)?.pauseLiveActivity()
+            (self.timer as? TimerPickerSheetViewModel)?.pauseLiveActivityIfNeeded()
           case .buffering:
             self.isLoading = true
             self.recoveryPlaybackStartedAt = nil
@@ -902,12 +1142,12 @@ extension BookPlayerModel {
           self.handleStreamFailure(error: error, shouldResume: shouldResume)
 
         case .finished:
-          player.pause()
           self.isLoading = false
           if self.mediaProgress.duration > 0 {
             self.mediaProgress.currentTime = self.mediaProgress.duration
           }
           self.recordBookCompletionIfNeeded(autoPlayNext: true)
+          player.pause()
 
         case .seek, .rateChanged:
           break
@@ -941,7 +1181,7 @@ extension BookPlayerModel {
       .store(in: &cancellables)
 
     NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereResetNotification)
-      .receive(on: DispatchQueue.main)
+      .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
       .sink { [weak self] _ in
         self?.handleMediaServicesReset()
       }
@@ -951,6 +1191,12 @@ extension BookPlayerModel {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] notification in
         self?.handleRouteChange(notification)
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+      .sink { [weak self] _ in
+        self?.positionSyncCheck?.cancel()
       }
       .store(in: &cancellables)
 
@@ -974,6 +1220,7 @@ extension BookPlayerModel {
       lastSyncedTime = globalTime
       self.updateMediaProgress()
       self.checkAutoDownloadAfterListening()
+      self.dismissPositionSyncIfListeningOn(at: globalTime)
 
       if UserPreferences.shared.lockScreenShowRemainingInTitle {
         self.nowPlaying.update()
@@ -996,7 +1243,7 @@ extension BookPlayerModel {
 
     itemObservation = Task { [weak self] in
       for await updatedItem in LocalBook.observe(where: \.bookID, equals: bookID) {
-        guard !Task.isCancelled, let self else { continue }
+        guard !Task.isCancelled, let self, let updatedItem else { continue }
 
         self.item = updatedItem as any PlayableItem
 
@@ -1022,7 +1269,7 @@ extension BookPlayerModel {
 
     itemObservation = Task { [weak self] in
       for await updatedEpisode in LocalEpisode.observe(where: \.episodeID, equals: episodeID) {
-        guard !Task.isCancelled, let self else { continue }
+        guard !Task.isCancelled, let self, let updatedEpisode else { continue }
 
         self.item = updatedEpisode as any PlayableItem
 
@@ -1037,17 +1284,6 @@ extension BookPlayerModel {
 }
 
 extension BookPlayerModel {
-  private func configureAudioSession() {
-    do {
-      let mix = userPreferences.mixWithOtherAudio && audioSession.secondaryAudioShouldBeSilencedHint
-      let options: AVAudioSession.CategoryOptions = mix ? [.mixWithOthers] : []
-      let policy: AVAudioSession.RouteSharingPolicy = mix ? .default : .longFormAudio
-      try audioSession.setCategory(.playback, mode: .spokenAudio, policy: policy, options: options)
-    } catch {
-      AppLogger.player.error("Failed to configure audio session: \(error)")
-    }
-  }
-
   private func handleAudioInterruption(_ notification: Notification) {
     guard let userInfo = notification.userInfo,
       let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -1059,36 +1295,36 @@ extension BookPlayerModel {
     switch type {
     case .began:
       AppLogger.player.info("Audio interruption began")
-      interruptionBeganAt = isPlaying ? Date() : nil
+      let reasonValue = userInfo[AVAudioSessionInterruptionReasonKey] as? UInt
+      let reason = reasonValue.flatMap(AVAudioSession.InterruptionReason.init(rawValue:))
+      interruption = isPlaying ? (Date(), reason == .routeDisconnected) : nil
 
     case .ended:
       guard sessionManager.current != nil else {
         AppLogger.player.info("Audio interruption ended - not resuming (no active session)")
-        interruptionBeganAt = nil
+        interruption = nil
         return
       }
 
-      applySmartRewind(reason: .onInterruption)
-
-      if interruptionBeganAt != nil,
+      if let interruption, !interruption.wasRouteDisconnect,
         let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt,
         AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume)
       {
         AppLogger.player.info("Audio interruption ended - resuming playback")
-        interruptionBeganAt = nil
-        try? audioSession.setActive(true)
+        self.interruption = nil
+        applySmartRewind(reason: .onInterruption)
         player?.resume()
-      } else if let beganAt = interruptionBeganAt,
-        Date().timeIntervalSince(beganAt) < 60 * 5,
+      } else if let interruption, !interruption.wasRouteDisconnect,
+        Date().timeIntervalSince(interruption.beganAt) < 60 * 5,
         !audioSession.secondaryAudioShouldBeSilencedHint
       {
         AppLogger.player.info("Audio interruption ended - resuming playback (within 5 minutes)")
-        interruptionBeganAt = nil
-        try? audioSession.setActive(true)
+        self.interruption = nil
+        applySmartRewind(reason: .onInterruption)
         player?.resume()
       } else {
         AppLogger.player.info("Audio interruption ended - not resuming")
-        interruptionBeganAt = nil
+        interruption = nil
       }
 
     @unknown default:
@@ -1114,13 +1350,11 @@ extension BookPlayerModel {
     switch reason {
     case .oldDeviceUnavailable:
       AppLogger.player.info("Audio route changed (old device unavailable) - pausing")
-      player?.pause()
+      onPauseTapped()
 
     case .newDeviceAvailable, .override:
-      guard isPlaying, interruptionBeganAt == nil, sessionManager.current != nil else { return }
+      guard isPlaying, interruption == nil, sessionManager.current != nil else { return }
       AppLogger.player.info("Audio route changed (\(reason.rawValue)) - re-activating session")
-      configureAudioSession()
-      try? audioSession.setActive(true)
       player?.resume()
 
     default:
@@ -1136,7 +1370,6 @@ extension BookPlayerModel {
     let wasPlaying = isPlaying
     player?.stop()
     player = nil
-    configureAudioSession()
 
     do {
       try setupAudioPlayer()
@@ -1176,6 +1409,7 @@ extension BookPlayerModel {
         if mediaProgress.duration > 0 {
           mediaProgress.progress = mediaProgress.currentTime / mediaProgress.duration
         }
+        updateNarrationProgress()
         try mediaProgress.save()
 
         syncSessionProgress()
@@ -1242,24 +1476,40 @@ extension BookPlayerModel {
     else { return }
 
     if let chapters, chapters.repeatMode != .off {
-      repeatItem()
+      if autoPlayNext { repeatItem() }
       return
     }
 
     hasRecordedCompletion = true
+    mediaProgress.currentTime = mediaProgress.duration
+    if let session = sessionManager.current {
+      session.currentTime = mediaProgress.duration
+      session.updatedAt = Date()
+      session.pendingListeningTime = max(session.pendingListeningTime, 1)
+      try? session.save()
+    }
 
     if let localBook = item as? LocalBook {
       Task {
-        try? await localBook.markAsFinished()
+        do {
+          try await localBook.markAsFinished()
+        } catch {
+          AppLogger.player.error("Failed to mark book as finished: \(error)")
+        }
       }
     } else if let episodeID, let podcastID {
       Task {
-        try? MediaProgress.markAsFinished(for: episodeID)
-        let episodeProgressID = "\(podcastID)/\(episodeID)"
-        try? await audiobookshelf.libraries.markAsFinished(bookID: episodeProgressID)
+        do {
+          try MediaProgress.markAsFinished(for: episodeID)
+          let episodeProgressID = "\(podcastID)/\(episodeID)"
+          try await audiobookshelf.progress.markAsFinished(bookID: episodeProgressID)
+        } catch {
+          AppLogger.player.error("Failed to mark episode as finished: \(error)")
+        }
       }
     }
-    playerManager.playNext(autoPlay: autoPlayNext)
+    let handOffToNextItem = (timer as? TimerPickerSheetViewModel)?.handOffToNextItem() ?? true
+    playerManager.playNext(autoPlay: autoPlayNext && handOffToNextItem)
   }
 
   private func repeatItem() {
@@ -1363,6 +1613,12 @@ extension BookPlayerModel {
       try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
     }
 
+    guard playerManager.current === self else {
+      isLoading = false
+      isRecovering = false
+      return
+    }
+
     do {
       if !isDownloaded || useRemoteFallback, recoveryAttempts > 1 {
         sessionManager.clearSession()
@@ -1387,6 +1643,8 @@ extension BookPlayerModel {
 
       isLoading = false
       isRecovering = false
+
+      guard playerManager.current === self else { return }
 
       guard pendingPlay else {
         AppLogger.player.info("Playback recovery canceled by the user")

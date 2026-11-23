@@ -33,7 +33,7 @@ struct NarratorCard: View {
             }
           }
           .aspectRatio(1.0, contentMode: .fit)
-          .clipShape(Circle())
+          .clipShape(.circle)
 
         if model.bookCount > 0 {
           Text("\(model.bookCount)")

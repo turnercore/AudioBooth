@@ -9,7 +9,7 @@ struct ContentView: View {
 
   var body: some View {
     NavigationStack {
-      ContinueListeningView(model: ContinueListeningViewModel())
+      PhoneDownloadsView()
         .toolbar {
           toolbar
         }
@@ -22,7 +22,7 @@ struct ContentView: View {
           }
         }
         .onChange(of: playerManager.isShowingFullPlayer) { _, newValue in
-          if newValue, let model = playerManager.current {
+          if newValue, let model = playerManager.presented {
             self.player = model
           } else if !newValue {
             self.player = nil
@@ -70,6 +70,7 @@ struct ContentView: View {
     case .iphone:
       ToolbarItem(placement: .topBarTrailing) {
         Button {
+          playerManager.clearCurrent()
           showRemotePlayer = true
         } label: {
           Image(systemName: "iphone")

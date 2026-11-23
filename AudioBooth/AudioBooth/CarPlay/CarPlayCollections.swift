@@ -3,62 +3,59 @@ import API
 import Foundation
 import Nuke
 
-final class CarPlayCollections: CarPlayPageProtocol {
+final class CarPlayCollections {
   private let interfaceController: CPInterfaceController
   private weak var nowPlaying: CarPlayNowPlaying?
+  private let mode: CollectionMode
   private var selectedDetail: CarPlayCollectionDetails?
+  private let itemsPerPage: Int = 50
 
   let template: CPListTemplate
 
-  init(interfaceController: CPInterfaceController, nowPlaying: CarPlayNowPlaying) {
+  init(interfaceController: CPInterfaceController, nowPlaying: CarPlayNowPlaying, mode: CollectionMode) {
     self.interfaceController = interfaceController
     self.nowPlaying = nowPlaying
+    self.mode = mode
 
-    let title = String(localized: "Collections")
+    let title =
+      switch mode {
+      case .collections: String(localized: "Collections")
+      case .playlists: String(localized: "Playlists")
+      }
     template = CPListTemplate(title: title, sections: [])
-    template.tabTitle = title
-    template.tabImage = UIImage(systemName: "square.stack.fill")
     template.emptyViewTitleVariants = [String(localized: "Loading...")]
-  }
 
-  func willAppear() {
     Task { await load() }
   }
 
   private func load() async {
-    async let collectionsResult = try? Audiobookshelf.shared.collections.fetch()
-    async let playlistsResult = try? Audiobookshelf.shared.playlists.fetch()
+    let items: [CPListItem]
 
-    let (collectionsPage, playlistsPage) = await (collectionsResult, playlistsResult)
-
-    let collections = collectionsPage?.results ?? []
-    let playlists = playlistsPage?.results ?? []
-
-    var sections: [CPListSection] = []
-
-    if !collections.isEmpty {
-      let items = collections.map {
-        createListItem(name: $0.name, count: $0.itemCount, coverURL: $0.covers.first, queueItems: $0.queueItems)
+    switch mode {
+    case .collections:
+      let page = try? await Audiobookshelf.shared.collections.fetch(limit: itemsPerPage, page: 0)
+      items = (page?.results ?? []).map {
+        createListItem(id: $0.id, name: $0.name, count: $0.itemCount, coverURL: $0.covers.first)
       }
-      sections.append(CPListSection(items: items, header: String(localized: "Collections"), sectionIndexTitle: nil))
+    case .playlists:
+      let page = try? await Audiobookshelf.shared.playlists.fetch(limit: itemsPerPage, page: 0)
+      items = (page?.results ?? []).map {
+        createListItem(id: $0.id, name: $0.name, count: $0.itemCount, coverURL: $0.covers.first)
+      }
     }
 
-    if !playlists.isEmpty {
-      let items = playlists.map {
-        createListItem(name: $0.name, count: $0.itemCount, coverURL: $0.covers.first, queueItems: $0.queueItems)
-      }
-      sections.append(CPListSection(items: items, header: String(localized: "Playlists"), sectionIndexTitle: nil))
-    }
-
-    if sections.isEmpty {
-      template.emptyViewTitleVariants = [String(localized: "No Collections")]
+    guard !items.isEmpty else {
+      template.emptyViewTitleVariants = [
+        mode == .collections ? String(localized: "No Collections") : String(localized: "No Playlists")
+      ]
       template.emptyViewSubtitleVariants = [String(localized: "Create collections or playlists in the app")]
+      return
     }
 
-    template.updateSections(sections)
+    template.updateSections([CPListSection(items: items)])
   }
 
-  private func createListItem(name: String, count: Int, coverURL: URL?, queueItems: [QueueItem]) -> CPListItem {
+  private func createListItem(id: String, name: String, count: Int, coverURL: URL?) -> CPListItem {
     let item = CPListItem(
       text: name,
       detailText: "\(count) item\(count == 1 ? "" : "s")"
@@ -73,56 +70,28 @@ final class CarPlayCollections: CarPlayPageProtocol {
     }
 
     item.handler = { [weak self] _, completion in
-      self?.showDetails(name: name, items: queueItems)
+      self?.showDetails(id: id, name: name)
       completion()
     }
 
     return item
   }
 
-  private func showDetails(name: String, items: [QueueItem]) {
+  private func showDetails(id: String, name: String) {
     guard let nowPlaying else { return }
     let details = CarPlayCollectionDetails(
       interfaceController: interfaceController,
       nowPlaying: nowPlaying,
+      id: id,
       name: name,
-      items: items
+      mode: mode
     )
     selectedDetail = details
-    interfaceController.pushTemplate(details.template, animated: true, completion: nil)
+    interfaceController.pushTemplate(details.template, animated: true, completion: { _, _ in })
   }
 
   private func loadImage(from url: URL) async -> UIImage? {
     let request = ImageRequest(url: url)
     return try? await ImagePipeline.shared.image(for: request)
-  }
-}
-
-private extension Collection {
-  var queueItems: [QueueItem] {
-    books.map {
-      QueueItem(bookID: $0.id, title: $0.title, details: $0.authorName, coverURL: $0.coverURL())
-    }
-  }
-}
-
-private extension Playlist {
-  var queueItems: [QueueItem] {
-    items.compactMap { item in
-      switch item.libraryItem {
-      case .book(let book):
-        return QueueItem(bookID: book.id, title: book.title, details: book.authorName, coverURL: book.coverURL())
-      case .podcast(let podcast):
-        guard let episodeID = item.episodeID else { return nil }
-        let title = item.episode?.title ?? podcast.title
-        return QueueItem(
-          bookID: episodeID,
-          title: title,
-          details: podcast.title,
-          coverURL: podcast.coverURL(),
-          podcastID: podcast.id
-        )
-      }
-    }
   }
 }

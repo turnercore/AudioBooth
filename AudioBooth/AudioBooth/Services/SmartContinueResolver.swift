@@ -14,19 +14,32 @@ struct SmartContinueResolver {
   private let audiobookshelf = Audiobookshelf.shared
   private let preferences = UserPreferences.shared
 
+  func isEnabled(currentPodcastID: String?) -> Bool {
+    if currentPodcastID != nil {
+      return preferences.continueNextPodcastEpisode
+    }
+    return preferences.continueNextInSeries || preferences.continueNextDownloadedBook
+  }
+
   func resolve(
     currentItemID: String,
     currentPodcastID: String?
   ) async -> ResolvedItem? {
     if let currentPodcastID {
+      guard preferences.continueNextPodcastEpisode else { return nil }
+
       guard let podcast = try? await audiobookshelf.podcasts.fetch(id: currentPodcastID) else {
         return resolveNextOfflineEpisode(currentEpisodeID: currentItemID)
       }
       return nextEpisode(after: currentItemID, in: podcast)
     } else {
-      if let next = await resolveNextBookInSeries(currentBookID: currentItemID) {
+      if preferences.continueNextInSeries,
+        let next = await resolveNextBookInSeries(currentBookID: currentItemID)
+      {
         return next
       }
+
+      guard preferences.continueNextDownloadedBook else { return nil }
       return resolveNextOfflineBook(currentBookID: currentItemID)
     }
   }
@@ -65,15 +78,17 @@ extension SmartContinueResolver {
   }
 
   private func resolveNextOfflineEpisode(currentEpisodeID: String) -> ResolvedItem? {
-    let episodes = (try? LocalEpisode.fetchAll()) ?? []
+    let episodes = ((try? LocalEpisode.fetchAll()) ?? []).filter { $0.isDownloaded }
     guard let currentIndex = episodes.firstIndex(where: { $0.episodeID == currentEpisodeID }) else {
       return nil
     }
 
-    let nextIndex = episodes.index(after: currentIndex)
-    guard nextIndex < episodes.endIndex else { return nil }
+    let remaining = episodes[episodes.index(after: currentIndex)...]
+    guard let next = remaining.first(where: { MediaProgress.progress(for: $0.episodeID) < 1.0 })
+    else {
+      return nil
+    }
 
-    let next = episodes[nextIndex]
     return ResolvedItem(
       bookID: next.episodeID,
       title: next.title,
@@ -107,10 +122,11 @@ extension SmartContinueResolver {
       return nil
     }
 
-    let nextIndex = page.results.index(after: currentIndex)
-    guard nextIndex < page.results.endIndex else { return nil }
+    let remaining = page.results[page.results.index(after: currentIndex)...]
+    guard let next = remaining.first(where: { MediaProgress.progress(for: $0.id) < 1.0 }) else {
+      return nil
+    }
 
-    let next = page.results[nextIndex]
     return ResolvedItem(
       bookID: next.id,
       title: next.title,
@@ -121,15 +137,22 @@ extension SmartContinueResolver {
   }
 
   private func resolveNextOfflineBook(currentBookID: String) -> ResolvedItem? {
-    let books = (try? LocalBook.fetchAll())?.sorted() ?? []
-    guard let currentIndex = books.firstIndex(where: { $0.bookID == currentBookID }) else {
+    let books = (try? LocalBook.fetchAll())?.filter { $0.isDownloaded }.sorted() ?? []
+    let isPlayable: (LocalBook) -> Bool = { book in
+      book.bookID != currentBookID && MediaProgress.progress(for: book.bookID) < 1.0
+    }
+
+    let following: ArraySlice<LocalBook> =
+      if let currentIndex = books.firstIndex(where: { $0.bookID == currentBookID }) {
+        books[books.index(after: currentIndex)...]
+      } else {
+        []
+      }
+
+    guard let next = following.first(where: isPlayable) ?? books.first(where: isPlayable) else {
       return nil
     }
 
-    let nextIndex = books.index(after: currentIndex)
-    guard nextIndex < books.endIndex else { return nil }
-
-    let next = books[nextIndex]
     return ResolvedItem(
       bookID: next.bookID,
       title: next.title,

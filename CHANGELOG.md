@@ -8,6 +8,139 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Apple Watch shortcuts - Pause, resume, skip, change chapters, set or cancel the sleep timer, and add bookmarks from Siri, the Shortcuts app, or the Action button on Apple Watch
+- Apple Watch bookmarks - Add bookmarks and jump to them while listening on your watch, even offline, and they sync to your server when your iPhone is back in range
+- Apple Watch sleep timer - Set a sleep timer by duration or number of chapters from the watch, whether playing on the watch or on your iPhone
+- Poster style for Continue Listening - New Continue Listening style on the Home page that shows large covers
+- Add to queue - Add all or selected books from a series, collection, or playlist to the queue
+- Pause at Zero Volume - New player preference to turn off pausing when muted and raising the volume when playing
+- Hide player labels - New preference to show only icons in the player actions bar
+- Player background styles - Choose a gradient, solid, or no cover color background for the player, and optionally tint the progress bar with the cover color
+- Ebook reader customization - Set the text alignment and pick custom background and text colors
+- Ebook cover on iPhone Duo - New option to show the book cover on the outside screen when the iPhone Duo is closed
+- Fuzzy author and narrator search - Suggest close name matches for misspelled searches
+- Apple Watch podcasts - Podcast episodes now show in Continue Listening on the watch, you can browse a podcast's episodes, and send an episode to your watch from its context menu on iPhone
+- System volume slider - New player preference to show the device volume slider under the playback controls
+- Author and narrator sorting - Book lists for an author or narrator can now be sorted
+- Audio bitrate - Book details now show the audio bitrate in the metadata section
+
+### Changed
+- Play All and Queue All - When some items are already finished, choose whether to play or queue only the unfinished ones or all of them
+- Ebook sharing - Ebooks are now shared with their file type so apps like Kindle accept them (thanks @ashishnag124)
+- Ebook reader on iPhone Duo - Improved reading experience on the iPhone Duo
+- Background battery use - The player now updates its progress less often while the app is in the background
+- Opus audio - Improved playback accuracy for Opus files
+- Podcast downloads - Episodes now show download progress and a downloaded indicator on the Home page, in the Latest tab, and in playlists, and show progress on the podcast and episode pages
+- Mini player on large screens - On wide screens, the mini player now shows time remaining, speed, skip, sleep timer, and queue controls
+- Finished episodes - Playing a finished podcast episode now starts it from the beginning
+- Player background - Improved cover color extraction for richer player and home episode card backgrounds
+- iPhone Duo - Polished layouts for book details, the player, and the listening stats card
+- Home episode cards - Refreshed design with more readable text, and cards in Continue Listening now follow the Continue section size preference
+- Playback with volume at 0 - Starting playback with the volume at 0 now raises the volume, and pauses if it stays muted
+- Next chapter on last chapter - The next chapter button now moves to the next item when Smart Continue is on (thanks @nyxaria)
+- Auto sleep timer - Now starts automatically when the time window begins while you're already listening
+- Apple Watch complications - The rectangular complication now shows the cover, chapter title, and time remaining, with a refreshed circular complication
+- Read Along - Tapping Read Along in the ebook reader now starts the audiobook if it isn't playing, and narrated EPUBs open faster
+- Continue Reading - Narrated EPUBs now show in Continue Reading instead of Continue Listening
+- Book details actions - The Play button now always appears first for narrated EPUBs
+- Downloads sorting - Sort downloads by date downloaded, title, or duration in ascending or descending order, also used by CarPlay and Assistive Access
+- Catch Up - No longer runs while the app is in the background, and the ebook is prepared faster
+- Auto-download - Now also downloads podcast episodes as you play them
+- Remove after unused - Now also applies to podcast episodes
+
+### Fixed
+- Book loading - Fixed some books and listening sessions failing to load when the server leaves out optional track or session details
+- Missing downloads - A download whose files are missing is now removed when you play it, so the book streams instead of failing
+- Ebook reader - Fixed taps not turning pages reliably, the auto theme not following the system appearance after returning to the app, and a crash when looking up chapters
+- Crashes - Fixed several crashes, including in CarPlay
+- Pinned playlist auto-download - Fixed podcast episodes in a pinned playlist not downloading automatically
+- Narrated EPUB animations - Fixed the narration download progress animation on book details, and the Read Along button now animates while the narration plays
+- Podcast playback - Fixed episodes not playing when their duration is missing, a UI freeze when streaming, Continue Listening in podcast libraries, Now Playing metadata, the Home episode card not showing pause, and Play All playing finished episodes (thanks @Creationsss)
+- Sleep timer Live Activity - Fixed the Live Activity pausing with playback even when the timer is set to keep running while paused
+
+## [1.13.0]
+
+### Added
+- EPUB 3 narration - EPUBs with built-in narration (Media Overlays) can now be downloaded to listen like an audiobook, with the full player, chapters, and progress sync. Read Along highlights the narrated sentence in the reader, and turning pages while paused moves the narration to your page
+- Assistive Access support - AudioBooth now works in Assistive Access mode, with a simplified list of your downloaded books and an easy to use player
+- Assisted Player - New player preference that shows a simplified player with only large play and skip buttons
+- Ebook reader progress header - New reader preference to show a header with the chapter title, chapter progress or page count, and overall book progress
+- Read Along sentence highlight - New reader preference to turn off highlighting of the narrated sentence
+- Bookmarks sorting - Sort bookmarks by time or date added, in ascending or descending order, and your choice is remembered
+- CarPlay Library tab - Browse books, series, collections, and playlists from a new Library tab in CarPlay
+- Apple Watch improvements - Send a book to your watch directly from the book details page on iPhone, and hand off playback from the watch player to your iPhone
+- Ebook reader Play from Here - Select a passage in the ebook to start the audiobook from that spot, with Catch Up now offered directly in the reader's player
+- Dynamic progress bar color - New player preference to tint the progress bar with the book cover color
+- Podcast library improvements - Home sections now show episode cards for the latest episodes, and the latest episodes page adds swipe actions to queue or mark as finished, a context menu, and a play button on each episode
+
+### Changed
+- Now Playing artwork - Cover art now scales properly to the size requested by the lock screen, Control Center, and connected devices
+- Equalizer - Added a 6 kHz band, and you can now save your own custom presets (long press a custom preset to delete it)
+- Sleep timer extend - Pressing play or pause from headphones or the lock screen, or turning up the volume while the timer is fading out, now extends the sleep timer
+- Auto download books - Books added to the queue now download automatically
+- CarPlay improvements - Author images now display, downloads follow your offline sort order, and time left reflects the currently playing book
+- Download storage check - Downloads now check available device storage and stop with a message when there isn't enough space
+- Maximum storage options - Added 100 GB, 200 GB, and 500 GB download storage limits
+- Ebook reader preferences sync - Volume navigation, auto scroll speed, progress header, and Read Along preferences now sync with iCloud
+- Player cover on iPad - The cover art in the player can now display larger on iPad
+- Session device info - Listening sessions now report the device model to the server
+- Book player improvements - The player now opens full screen with a zoom transition from the mini player, with refreshed controls, a time bubble while scrubbing, and fine scrubbing (drag down for half-speed or quarter-speed precision)
+- iPhone Duo - Layouts now adapt around the hinge on book details, podcast details, the player, library pages, and the ebook reader
+- Progress sync - The currently playing item now refreshes its progress from the server when you return to the app
+
+### Fixed
+- Listening activity heatmap - Fixed overlapping month labels on the stats page and widget
+- Player sheets - Fixed incorrect sheet heights in the player
+- Sleep timer extend - Fixed playing or shaking after the extend window expired not resetting the sleep timer alert
+- Book and podcast details - Fixed a cover layout glitch in landscape
+- Screen backgrounds - Fixed backgrounds not extending behind the safe areas on several screens
+- Ebook current chapter - Fixed the current chapter not being detected correctly in the reader
+- Playback recovery - Fixed repeated recovery attempts after the system audio services reset
+- Watch player - Fixed a duration error caused by progress being reported while paused
+- Continue Listening - Fixed removing the currently playing book from Continue Listening
+- Smart rewind - Fixed smart rewind when streaming
+- Mark as finished - Fixed an issue where marking a book as finished could fail during playback
+- Home page - Fixed home sections not updating correctly after switching libraries
+- Watch app covers - Fixed covers not displaying correctly on the watch app
+
+## [1.12.0]
+
+### Added
+- Catch Up - When you've read further in the ebook than you've listened, the player offers to skip the audiobook to where you stopped reading. Everything runs on device and requires iOS 26, with both the ebook and audiobook downloaded
+- Page Match - Point the camera at a page of your printed book, or pick a photo of one you took earlier, to jump to that spot in the audiobook. Everything runs on device and requires iOS 26 (thanks @andrespinones)
+- Read Along - Follow the ebook while the audiobook plays, with the narrated sentence highlighted and the page turning itself. Transcription happens entirely on device and requires iOS 26
+- Total counts - Show total item counts on the library, authors, series, and collections pages
+- Sleep timer Focus intent - Activate the auto sleep timer using a Focus (thanks @fivezeroes)
+- Sleep timer pause behavior - Configurable sleep timer behavior when playback is paused (thanks @fivezeroes)
+
+### Changed
+- Watch downloads UI - Cover now shows a circular progress ring (48pt, orange/green), each row has one inline progress line (transfer MB/% or listen %), Now Playing sits at the top, and Transfer debounces to Scheduling… to prevent double-taps
+- Search experience - Normalize whitespace, reduce input debounce, label close matches, and expose narrator search consistently
+- Home shelves - Show up to 20 Recently Added books and Recent Series while preserving the server's recent-series rules
+- Downloads revamp - Full revamp of how downloads are handled, with improved multi-track and background downloads, the ability to resume failed downloads, and better overall stability
+- Podcast episode download indicator - Improved visibility of the download indicator
+- Adaptive sheets - Now scroll to support large font sizes
+- Mac Catalyst sheets - Added a close button to adaptive sheets (thanks @kornelko2)
+- Player - Now closes when a finished book has nothing to play next (thanks @kornelko2)
+- Multitrack audio - Improved audio player handling of multitrack books
+
+### Fixed
+- Watch transfer progress - Correct stale 50% tiles by always re-deriving progress from the reconciled local timeline; queue transfers with a fresh playback position so Watch starts within seconds, not chapters behind
+- Downloaded audiobook progress - Reconcile offline duration and track timing with the downloaded audio files
+- Sleep timer resume - Clear completed timers without implicitly extending or immediately rearming them
+- Library search - Preserve valid author and narrator matches when another search result uses an incompatible server response shape
+- Home shelf freshness - App launch and pull-to-refresh now bypass stale personalized-shelf cache entries, and shelf loading no longer depends on progress synchronization succeeding
+- Library covers - Reconfigure image loading for the active server and custom proxy headers so uncached thumbnails do not silently fail
+- Multi-file downloads - Fixed background downloads for books with multiple files (thanks @cbzehner)
+- Series card covers - Fixed a layout issue with series card covers
+- Series, genre, and tag lists - Fixed list content being hidden behind the mini player (thanks @kornelko2)
+- Authors list - Fixed authors with zero books appearing in the list (thanks @kornelko2)
+- Collection page - Fixed various issues on the collection page
+- Media progress - Fixed media progress edge cases
+
+## [1.11.0]
+
+### Added
 - Keep next items offline - New storage preference to automatically download what's next in started series and podcasts, with a configurable number of items
 - Volume leveling - New equalizer option that evens out loud and quiet passages, with low, medium, and high strength
 - Siri support - Use Siri to play a downloaded book or resume your current book

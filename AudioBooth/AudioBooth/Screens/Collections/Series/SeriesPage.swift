@@ -36,7 +36,27 @@ struct SeriesPage: View {
       text: $model.search.searchText,
       prompt: "Search books, series, and authors"
     )
+    .sheet(isPresented: $model.showingFilterSelection) {
+      if let filters = model.filters {
+        NavigationStack {
+          FilterPicker(model: filters)
+        }
+      }
+    }
     .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        Button {
+          model.onFilterTapped()
+        } label: {
+          Label(
+            model.filters?.selectedFilter?.title ?? "All",
+            systemImage: model.filters?.selectedFilter?.title == nil
+              ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill"
+          )
+        }
+        .tint(.primary)
+      }
+
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
           Toggle(
@@ -62,7 +82,7 @@ struct SeriesPage: View {
               }
             )
           ) {
-            Label("List View", systemImage: "rectangle.grid.1x3")
+            Label("List View", systemImage: "rectangle.grid.1x2")
           }
 
           Divider()
@@ -91,12 +111,23 @@ struct SeriesPage: View {
 
   var seriesContent: some View {
     ScrollView {
-      SeriesView(
-        series: model.series,
-        hasMorePages: model.hasMorePages,
-        onLoadMore: model.loadNextPageIfNeeded
-      )
+      VStack {
+        if let total = model.totalCount {
+          Text("^[\(total) series](inflect: true)")
+            .font(.title2.bold())
+            .foregroundColor(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        SeriesView(
+          series: model.series,
+          hasMorePages: model.hasMorePages,
+          pageLoadFailed: model.pageLoadFailed,
+          onLoadMore: model.loadNextPageIfNeeded
+        )
+      }
       .padding(.horizontal)
+      .padding(.vertical)
     }
     .environment(\.itemDisplayMode, preferences.libraryDisplayMode)
   }
@@ -106,6 +137,8 @@ extension SeriesPage {
   @Observable class Model: ObservableObject {
     var isLoading: Bool
     var hasMorePages: Bool
+    var pageLoadFailed: Bool = false
+    var totalCount: Int?
 
     var series: [SeriesCard.Model]
     var search: SearchView.Model = SearchView.Model()
@@ -114,11 +147,15 @@ extension SeriesPage {
     var currentSort: SeriesService.SortBy
     var ascending: Bool
 
+    var filters: FilterPicker.Model?
+    var showingFilterSelection: Bool = false
+
     func onAppear() {}
     func refresh() async {}
     func loadNextPageIfNeeded() {}
     func onDisplayModeTapped() {}
     func onSortOptionTapped(_ sortBy: SeriesService.SortBy) {}
+    func onFilterTapped() {}
 
     init(
       isLoading: Bool = false,
@@ -158,7 +195,9 @@ extension SeriesPage.Model {
       ),
     ]
 
-    return SeriesPage.Model(series: sampleSeries)
+    let model = SeriesPage.Model(series: sampleSeries)
+    model.totalCount = sampleSeries.count
+    return model
   }
 }
 

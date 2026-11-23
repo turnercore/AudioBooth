@@ -7,6 +7,28 @@ public final class BooksService {
     self.audiobookshelf = audiobookshelf
   }
 
+  /// Fetches raw cover image bytes through the authenticated network pipeline.
+  public func fetchCoverData(itemID: String) async throws -> Data {
+    guard let networkService = audiobookshelf.networkService else {
+      throw Audiobookshelf.AudiobookshelfError.networkError(
+        "Network service not configured. Please login first."
+      )
+    }
+
+    let request = NetworkRequest<Data>(
+      path: "/api/items/\(itemID)/cover",
+      query: ["raw": "1"],
+      timeout: 10
+    )
+    let response = try await networkService.send(request)
+    guard !response.value.isEmpty else {
+      throw Audiobookshelf.AudiobookshelfError.networkError(
+        "The server did not return cover artwork."
+      )
+    }
+    return response.value
+  }
+
   public func fetch(
     limit: Int? = nil,
     page: Int? = nil,
@@ -22,7 +44,8 @@ public final class BooksService {
       )
     }
 
-    let library = libraryID ?? audiobookshelf.libraries.current?.id
+    let currentLibraryID = await audiobookshelf.libraries.current?.id
+    let library = libraryID ?? currentLibraryID
     guard let library else {
       throw Audiobookshelf.AudiobookshelfError.networkError(
         "No library selected. Please select a library first."
@@ -81,28 +104,5 @@ public final class BooksService {
     } catch {
       throw error
     }
-  }
-
-  public func updateEbookProgress(bookID: String, progress: Double, location: String?) async throws {
-    guard let networkService = audiobookshelf.networkService else {
-      throw Audiobookshelf.AudiobookshelfError.networkError(
-        "Network service not configured. Please login first."
-      )
-    }
-
-    struct ProgressUpdate: Encodable {
-      let ebookProgress: Double
-      let ebookLocation: String?
-    }
-
-    let body = ProgressUpdate(ebookProgress: progress, ebookLocation: location)
-
-    let request = NetworkRequest<Data>(
-      path: "/api/me/progress/\(bookID)",
-      method: .patch,
-      body: body
-    )
-
-    _ = try await networkService.send(request)
   }
 }

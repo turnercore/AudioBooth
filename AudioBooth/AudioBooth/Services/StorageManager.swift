@@ -11,6 +11,10 @@ final class StorageManager {
   private init() {}
 
   func getDownloadedContentSize() async -> Int64 {
+    await Task.detached { Self.downloadedContentSize() }.value
+  }
+
+  nonisolated private static func downloadedContentSize() -> Int64 {
     guard
       let appGroupURL = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
@@ -33,7 +37,7 @@ final class StorageManager {
         FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory)
 
         if isDirectory.boolValue {
-          totalSize += calculateDirectorySize(at: directory)
+          totalSize += directory.directorySize
         }
       }
     } catch {
@@ -78,9 +82,9 @@ final class StorageManager {
 
     AppLogger.download.info("Cleaning up downloads unused since \(cutoffDate)")
 
-    let staleBookIDs = await MainActor.run {
+    let stale = await MainActor.run {
       let servers = Audiobookshelf.shared.authentication.servers
-      var result: [String] = []
+      var result: (books: [String], episodes: [(episodeID: String, podcastID: String)]) = ([], [])
 
       for server in servers.values {
         do {
@@ -97,11 +101,30 @@ final class StorageManager {
           for book in downloadedBooks {
             if book.bookID == currentlyPlaying { continue }
 
-            let lastUsed = progressByBookID[book.bookID]?.lastPlayedAt ?? book.createdAt
+            let lastUsed = max(
+              progressByBookID[book.bookID]?.lastPlayedAt ?? .distantPast,
+              book.downloadedAt ?? book.createdAt
+            )
 
             if lastUsed < cutoffDate {
               AppLogger.download.info("Removing unused download: \(book.title) (last used: \(lastUsed))")
-              result.append(book.bookID)
+              result.books.append(book.bookID)
+            }
+          }
+
+          let downloadedEpisodes = try context.fetch(FetchDescriptor<LocalEpisode>()).filter(\.isDownloaded)
+
+          for episode in downloadedEpisodes {
+            guard episode.episodeID != currentlyPlaying, let podcastID = episode.podcast?.podcastID else { continue }
+
+            let lastUsed = max(
+              progressByBookID[episode.episodeID]?.lastPlayedAt ?? .distantPast,
+              episode.downloadedAt ?? episode.createdAt
+            )
+
+            if lastUsed < cutoffDate {
+              AppLogger.download.info("Removing unused episode download: \(episode.title) (last used: \(lastUsed))")
+              result.episodes.append((episode.episodeID, podcastID))
             }
           }
         } catch {
@@ -111,8 +134,12 @@ final class StorageManager {
       return result
     }
 
-    for bookID in staleBookIDs {
+    for bookID in stale.books {
       DownloadManager.shared.deleteDownload(for: bookID)
+    }
+
+    for episode in stale.episodes {
+      DownloadManager.shared.deleteEpisodeDownload(episodeID: episode.episodeID, podcastID: episode.podcastID)
     }
   }
 
@@ -128,30 +155,6 @@ final class StorageManager {
     URLCache.shared.removeAllCachedResponses()
   }
 
-  private func calculateDirectorySize(at url: URL) -> Int64 {
-    var size: Int64 = 0
-
-    guard
-      let enumerator = FileManager.default.enumerator(
-        at: url,
-        includingPropertiesForKeys: [.fileSizeKey],
-        options: [.skipsHiddenFiles]
-      )
-    else {
-      return 0
-    }
-
-    for case let fileURL as URL in enumerator {
-      do {
-        let resourceValues = try fileURL.resourceValues(forKeys: [.fileSizeKey])
-        size += Int64(resourceValues.fileSize ?? 0)
-      } catch {
-        continue
-      }
-    }
-
-    return size
-  }
 }
 
 extension Int64 {

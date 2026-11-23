@@ -87,7 +87,7 @@ struct ServerView: View {
       }
     }
     .scrollContentBackground(.hidden)
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle("Server")
     .alert("Scan Local Network", isPresented: $model.showDiscoveryPortAlert) {
       TextField("Discovery Port", text: $model.discoveryPort)
@@ -128,7 +128,7 @@ struct ServerView: View {
               Text(server.serverURL.absoluteString)
                 .foregroundColor(.primary)
               Spacer()
-              Text("\(Int(server.responseTime * 1000))ms")
+              Text(verbatim: "\(Int(server.responseTime * 1000))ms")
                 .font(.caption)
                 .foregroundColor(.secondary)
             }

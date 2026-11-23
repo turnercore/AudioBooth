@@ -38,6 +38,18 @@ public final class ModelContextProvider {
     }
   }
 
+  public var modelContainer: ModelContainer {
+    if let activeServerID, let container = containers[activeServerID] {
+      return container
+    }
+
+    _ = context
+    guard let container = containers[activeServerID ?? "fallback"] else {
+      fatalError("Failed to resolve active database container")
+    }
+    return container
+  }
+
   private init() {}
 
   public func context(for serverID: String) throws -> ModelContext {
@@ -58,6 +70,7 @@ public final class ModelContextProvider {
       contexts[serverID] = container.mainContext
     }
     activeServerID = serverID
+    MediaProgress.reloadCache()
   }
 
   public func useInMemoryContainer(for serverID: String) throws {

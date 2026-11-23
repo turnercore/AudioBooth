@@ -5,13 +5,15 @@ import SwiftUI
 extension EnvironmentValues {
   @Entry var itemDisplayMode: BookCard.DisplayMode = .card
   @Entry var coverSize: CGFloat? = nil
+  @Entry var posterWidth: CGFloat? = nil
 }
 
 struct BookCard: View {
   @ObservedObject var model: Model
+  @Environment(\.itemDisplayMode) private var displayMode
 
   var body: some View {
-    NavigationLink(value: navigationDestination) {
+    DestinationLink(destination: navigationDestination, zooms: displayMode == .card) {
       Content(model: model)
     }
     .buttonStyle(.plain)
@@ -22,12 +24,15 @@ struct BookCard: View {
         PodcastEpisodeContextMenu(model: model)
       }
     }
+    .menuOrder(.priority)
+    .bookCardAccessibilityActions(model: model)
+    .bookCardCollectionSelector(model: model)
     .onAppear(perform: model.onAppear)
   }
 
   private var navigationDestination: NavigationDestination {
     if let id = model.podcastID {
-      .podcast(id: id, episodeID: model.id)
+      .podcast(id: id, episodeID: model.id == id ? nil : model.id)
     } else {
       .book(id: model.id)
     }
@@ -44,7 +49,7 @@ struct BookListCard: View {
 
   var body: some View {
     BookCard.Content(model: model)
-      .contentShape(Rectangle())
+      .contentShape(.rect)
       .overlay {
         if !isEditing {
           NavigationLink(value: navigationDestination) {}
@@ -58,12 +63,15 @@ struct BookListCard: View {
           PodcastEpisodeContextMenu(model: model)
         }
       }
+      .menuOrder(.priority)
+      .bookCardAccessibilityActions(model: model)
+      .bookCardCollectionSelector(model: model)
       .onAppear(perform: model.onAppear)
   }
 
   private var navigationDestination: NavigationDestination {
     if let id = model.podcastID {
-      .podcast(id: id, episodeID: model.id)
+      .podcast(id: id, episodeID: model.id == id ? nil : model.id)
     } else {
       .book(id: model.id)
     }
@@ -131,7 +139,7 @@ extension BookCard {
         }
         .frame(maxWidth: coverWidth, alignment: .leading)
       }
-      .contentShape(Rectangle())
+      .contentShape(.rect)
     }
 
     private var rowLayout: some View {
@@ -178,7 +186,7 @@ extension BookCard {
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .contentShape(Rectangle())
+      .contentShape(.rect)
     }
 
     private var cover: some View {
@@ -202,7 +210,7 @@ extension BookCard {
             }
           }
         }
-        .contentShape(Rectangle())
+        .contentShape(.rect)
     }
 
     @ViewBuilder
@@ -387,6 +395,7 @@ extension BookCard {
     var isDownloaded: Bool
     let isExplicit: Bool
     var timeRemaining: TimeInterval?
+    var summary: String?
 
     func onAppear() {}
 

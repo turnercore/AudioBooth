@@ -58,7 +58,7 @@ struct ContinueListeningCoverFlowView: View {
   }
 
   private func card(for item: BookCard.Model, containerWidth: CGFloat) -> some View {
-    NavigationLink(value: navigationDestination(for: item)) {
+    DestinationLink(destination: navigationDestination(for: item), zooms: true) {
       ZStack {
         Color.clear
 
@@ -81,13 +81,13 @@ struct ContinueListeningCoverFlowView: View {
           }
           .allowsHitTesting(false)
       }
-      .contentShape(Rectangle())
+      .contentShape(.rect)
     }
     .buttonStyle(.plain)
     .overlay {
       if model.focusedID != item.id {
         Color.clear
-          .contentShape(Rectangle())
+          .contentShape(.rect)
           .onTapGesture {
             withAnimation(.smooth(duration: 0.4)) {
               model.focusedID = item.id
@@ -104,7 +104,19 @@ struct ContinueListeningCoverFlowView: View {
         }
       }
     }
+    .menuOrder(.priority)
+    .accessibilityLabel(accessibilityLabel(for: item))
+    .bookCardAccessibilityActions(model: item)
+    .bookCardCollectionSelector(model: item)
     .onAppear(perform: item.onAppear)
+  }
+
+  private func accessibilityLabel(for item: BookCard.Model) -> String {
+    if let author = item.author, !author.isEmpty {
+      "\(item.title), \(author)"
+    } else {
+      item.title
+    }
   }
 
   private func navigationDestination(for item: BookCard.Model) -> NavigationDestination {

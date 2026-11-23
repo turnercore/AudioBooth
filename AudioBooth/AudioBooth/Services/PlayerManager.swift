@@ -15,10 +15,15 @@ final class PlayerManager: ObservableObject, Sendable {
 
   @Published var current: BookPlayer.Model? {
     didSet {
+      selectionID = UUID()
       if let current {
-        UserDefaults.standard.set(current.id, forKey: Self.currentIDKey)
-      } else {
-        UserDefaults.standard.removeObject(forKey: Self.currentIDKey)
+        guard
+          let library = Audiobookshelf.shared.libraries.current,
+          library.mediaType == (current.podcastID == nil ? .book : .podcast)
+        else { return }
+        currentIDsByLibrary[library.id] = current.id
+      } else if let oldID = oldValue?.id {
+        currentIDsByLibrary = currentIDsByLibrary.filter { $0.value != oldID }
       }
     }
   }
@@ -36,6 +41,38 @@ final class PlayerManager: ObservableObject, Sendable {
   private let sharedDefaults = UserDefaults(suiteName: "group.com.turnercore.audioBS")
 
   private var cancellables = Set<AnyCancellable>()
+  private var serverID: String?
+  private var selectionID = UUID()
+
+  private struct SelectionRequest: Equatable {
+    let id: UUID
+    let serverID: String?
+    let contextID: ObjectIdentifier?
+  }
+
+  private var selectionRequest: SelectionRequest {
+    SelectionRequest(
+      id: selectionID,
+      serverID: Audiobookshelf.shared.authentication.server?.id,
+      contextID: ModelContextProvider.shared.activeServerID == nil
+        ? nil : ObjectIdentifier(ModelContextProvider.shared.context)
+    )
+  }
+
+  private func beginSelection() -> SelectionRequest {
+    selectionID = UUID()
+    return selectionRequest
+  }
+
+  private var currentIDsByLibrary: [String: String] {
+    get {
+      let storage = Audiobookshelf.shared.authentication.server?.storage
+      return storage?.dictionary(forKey: Self.currentIDKey) as? [String: String] ?? [:]
+    }
+    set {
+      Audiobookshelf.shared.authentication.server?.storage.set(newValue, forKey: Self.currentIDKey)
+    }
+  }
 
   private init() {
     loadQueue()
@@ -44,32 +81,72 @@ final class PlayerManager: ObservableObject, Sendable {
   }
 
   private func setupServerObserver() {
-    let serverID = Audiobookshelf.shared.libraries.current?.serverID
+    serverID = Audiobookshelf.shared.libraries.current?.serverID
 
     Audiobookshelf.shared.libraries.objectWillChange
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in
-        DispatchQueue.main.async {
-          if serverID != Audiobookshelf.shared.libraries.current?.serverID {
-            self?.clearCurrent()
-            self?.clearQueue()
-          }
+        guard let self else { return }
+
+        let currentServerID = Audiobookshelf.shared.libraries.current?.serverID
+        if serverID != currentServerID {
+          serverID = currentServerID
+          sharedDefaults?.removeObject(forKey: "recentBooks")
+          sharedDefaults?.removeObject(forKey: "listeningStats")
+          clearCurrent()
+          clearQueue()
         }
       }
       .store(in: &cancellables)
   }
 
-  func restoreLastPlayer() async {
+  func restoreLastPlayer() {
     guard
       current == nil,
       ModelContextProvider.shared.activeServerID != nil,
-      let savedID = UserDefaults.standard.string(forKey: Self.currentIDKey)
+      let libraryID = Audiobookshelf.shared.libraries.current?.id
     else {
       return
     }
 
-    if let book = try? LocalBook.fetch(bookID: savedID) {
+    if let legacyID = UserDefaults.standard.string(forKey: Self.currentIDKey) {
+      UserDefaults.standard.removeObject(forKey: Self.currentIDKey)
+      restore(legacyID)
+    } else if let savedID = currentIDsByLibrary[libraryID] {
+      restore(savedID)
+    }
+  }
+
+  func resumeLastPlayed(in libraryID: String) async throws {
+    guard ModelContextProvider.shared.activeServerID != nil else {
+      throw ResumePlaybackError.couldNotStart
+    }
+
+    guard let itemID = currentIDsByLibrary[libraryID] else {
+      throw ResumePlaybackError.nothingPlayed
+    }
+
+    if Audiobookshelf.shared.libraries.current?.id != libraryID,
+      let library = Audiobookshelf.shared.libraries.libraries.first(where: { $0.id == libraryID })
+    {
+      Audiobookshelf.shared.libraries.current = library
+    }
+
+    if current?.id != itemID {
+      restore(itemID)
+    }
+
+    guard current?.id == itemID else {
+      throw ResumePlaybackError.couldNotStart
+    }
+
+    play()
+  }
+
+  private func restore(_ itemID: String) {
+    if let book = try? LocalBook.fetch(bookID: itemID) {
       setCurrent(book)
-    } else if let episode = try? LocalEpisode.fetch(episodeID: savedID) {
+    } else if let episode = try? LocalEpisode.fetch(episodeID: itemID) {
       setCurrent(episode)
     }
   }
@@ -83,6 +160,7 @@ final class PlayerManager: ObservableObject, Sendable {
   }
 
   func setCurrent(_ book: LocalBook) {
+    selectionID = UUID()
     if book.bookID == current?.id {
       isShowingFullPlayer = true
     } else {
@@ -96,6 +174,7 @@ final class PlayerManager: ObservableObject, Sendable {
   }
 
   func setCurrent(_ book: Book) {
+    selectionID = UUID()
     if book.id == current?.id {
       isShowingFullPlayer = true
     } else {
@@ -115,6 +194,7 @@ final class PlayerManager: ObservableObject, Sendable {
     podcastAuthor: String?,
     coverURL: URL?
   ) {
+    selectionID = UUID()
     if episode.id == current?.id {
       isShowingFullPlayer = true
     } else {
@@ -134,6 +214,7 @@ final class PlayerManager: ObservableObject, Sendable {
   }
 
   func setCurrent(_ episode: LocalEpisode) {
+    selectionID = UUID()
     if episode.episodeID == current?.id {
       isShowingFullPlayer = true
     } else {
@@ -169,15 +250,15 @@ final class PlayerManager: ObservableObject, Sendable {
 
   func openLocalBookAsEbook(_ localBook: LocalBook) {
     if let ebookURL = localBook.ebookLocalPath {
-      reader = EbookReaderViewModel(source: .local(ebookURL), bookID: localBook.bookID)
+      reader = EbookReaderViewModel(source: .local(url: ebookURL, bookID: localBook.bookID))
     } else {
       Toast(error: "Ebook file not available").show()
     }
   }
 
   func openRemoteBookAsEbook(_ book: Book) {
-    if let ebookURL = book.ebookURL {
-      reader = EbookReaderViewModel(source: .remote(ebookURL, headers: [:]), bookID: book.id)
+    if book.ebookURL != nil {
+      reader = EbookReaderViewModel(source: .book(book))
     } else {
       Toast(error: "Ebook not available").show()
     }
@@ -195,6 +276,7 @@ extension PlayerManager: PlayerManagerProtocol {
   }
 
   func play(_ bookID: String) async {
+    let request = beginSelection()
     do {
       if current?.id == bookID {
         play()
@@ -207,6 +289,7 @@ extension PlayerManager: PlayerManagerProtocol {
         }
       } else {
         let book = try await Audiobookshelf.shared.books.fetch(id: bookID)
+        guard selectionRequest == request else { return }
         if book.mediaType.contains(.audiobook) {
           setCurrent(book)
           play()
@@ -220,6 +303,7 @@ extension PlayerManager: PlayerManagerProtocol {
   }
 
   private func play(episodeID: String, podcastID: String) async {
+    let request = beginSelection()
     if current?.id == episodeID {
       play()
       return
@@ -233,6 +317,7 @@ extension PlayerManager: PlayerManagerProtocol {
 
     do {
       let podcast = try await Audiobookshelf.shared.podcasts.fetch(id: podcastID)
+      guard selectionRequest == request else { return }
       if let episode = podcast.media.episodes?.first(where: { $0.id == episodeID }) {
         setCurrent(
           episode: episode,
@@ -249,6 +334,7 @@ extension PlayerManager: PlayerManagerProtocol {
   }
 
   func open(_ bookID: String) async {
+    let request = beginSelection()
     do {
       if current?.id == bookID {
         showFullPlayer()
@@ -261,6 +347,7 @@ extension PlayerManager: PlayerManagerProtocol {
         }
       } else {
         let book = try await Audiobookshelf.shared.books.fetch(id: bookID)
+        guard selectionRequest == request else { return }
         if book.mediaType.contains(.ebook) {
           openRemoteBookAsEbook(book)
         } else if book.mediaType.contains(.audiobook) {
@@ -273,7 +360,8 @@ extension PlayerManager: PlayerManagerProtocol {
     }
   }
 
-  private func open(episodeID: String, podcastID: String) async {
+  func open(episodeID: String, podcastID: String) async {
+    let request = beginSelection()
     if current?.id == episodeID {
       showFullPlayer()
       return
@@ -287,6 +375,7 @@ extension PlayerManager: PlayerManagerProtocol {
 
     do {
       let podcast = try await Audiobookshelf.shared.podcasts.fetch(id: podcastID)
+      guard selectionRequest == request else { return }
       if let episode = podcast.media.episodes?.first(where: { $0.id == episodeID }) {
         setCurrent(
           episode: episode,
@@ -331,18 +420,10 @@ extension PlayerManager {
   }
 
   private func setupRemoteCommandCenter() {
-    do {
-      let audioSession = AVAudioSession.sharedInstance()
-      let otherAudioPlaying = audioSession.secondaryAudioShouldBeSilencedHint
-      let mix = userPreferences.mixWithOtherAudio && otherAudioPlaying
-      let options: AVAudioSession.CategoryOptions = mix ? [.mixWithOthers] : []
-      let policy: AVAudioSession.RouteSharingPolicy = mix ? .default : .longFormAudio
-      try audioSession.setCategory(.playback, mode: .spokenAudio, policy: policy, options: options)
-      if !mix, audioSession.isCarPlayConnected || !otherAudioPlaying {
-        try audioSession.setActive(true)
-      }
-    } catch {
-      AppLogger.player.error("Failed to configure audio session: \(error)")
+    let audioSession = AVAudioSession.sharedInstance()
+    let mix = AudioSession.configure()
+    if !mix, audioSession.isCarPlayConnected || !audioSession.secondaryAudioShouldBeSilencedHint {
+      Task { await AudioSession.activate() }
     }
 
     let commandCenter = MPRemoteCommandCenter.shared()
@@ -350,11 +431,6 @@ extension PlayerManager {
     commandCenter.playCommand.isEnabled = true
     commandCenter.playCommand.addTarget { [weak self] _ in
       guard let self, let current else { return .commandFailed }
-
-      if AVAudioSession.sharedInstance().outputVolume == 0 {
-        AppLogger.player.info("Play command received with volume at 0, raising system volume")
-        MPVolumeView.setSystemVolume(0.3)
-      }
 
       current.onPlayTapped()
 
@@ -365,6 +441,8 @@ extension PlayerManager {
     commandCenter.pauseCommand.addTarget { [weak self] _ in
       guard let self, let current else { return .commandFailed }
 
+      if current.timer.extendIfNeeded() { return .success }
+
       current.onPauseTapped()
 
       return .success
@@ -373,6 +451,8 @@ extension PlayerManager {
     commandCenter.togglePlayPauseCommand.isEnabled = true
     commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
       guard let self, let current else { return .commandFailed }
+
+      if current.timer.extendIfNeeded() { return .success }
 
       current.onTogglePlaybackTapped()
 
@@ -547,47 +627,60 @@ extension PlayerManager {
 
   func playAll(_ items: [QueueItem]) {
     guard let first = items.first else { return }
+    selectionID = UUID()
     clearQueue()
     queue = Array(items.dropFirst())
     playItem(first, autoPlay: true)
   }
 
-  func playNext(autoPlay: Bool = true) {
-    if !queue.isEmpty, userPreferences.autoPlayNextInQueue {
+  func playNext(autoPlay: Bool = true, isManual: Bool = false) {
+    let request = beginSelection()
+    if !queue.isEmpty, isManual || userPreferences.autoPlayNextInQueue {
       let nextItem = queue.removeFirst()
       playItem(nextItem, autoPlay: autoPlay)
       return
     }
 
-    guard
-      userPreferences.smartContinuePlayback,
-      let currentID = current?.id
-    else { return }
-
-    let currentPodcastID = current?.podcastID
-
     Task {
-      let resolver = SmartContinueResolver()
-      guard
-        let resolved = await resolver.resolve(
-          currentItemID: currentID,
-          currentPodcastID: currentPodcastID
-        )
-      else { return }
-
-      let item = QueueItem(
-        bookID: resolved.bookID,
-        title: resolved.title,
-        details: resolved.details,
-        coverURL: resolved.coverURL,
-        podcastID: resolved.podcastID
-      )
-      playItem(item, autoPlay: autoPlay)
+      guard selectionRequest == request else { return }
+      await resolveNext(autoPlay: autoPlay) {
+        await SmartContinueResolver().resolve(currentItemID: $0, currentPodcastID: $1)
+      }
     }
   }
 
+  func resolveNext(
+    autoPlay: Bool,
+    resolve: (String, String?) async -> SmartContinueResolver.ResolvedItem?
+  ) async {
+    guard let currentID = current?.id else {
+      clearCurrent()
+      return
+    }
+    let currentPodcastID = current?.podcastID
+    let request = selectionRequest
+    let resolved = await resolve(currentID, currentPodcastID)
+    guard selectionRequest == request else { return }
+    guard let resolved else {
+      clearCurrent()
+      return
+    }
+
+    let item = QueueItem(
+      bookID: resolved.bookID,
+      title: resolved.title,
+      details: resolved.details,
+      coverURL: resolved.coverURL,
+      podcastID: resolved.podcastID
+    )
+    playItem(item, autoPlay: autoPlay)
+  }
+
   private func playItem(_ item: QueueItem, autoPlay: Bool) {
+    restartIfFinished(item.bookID)
+    let request = selectionRequest
     Task {
+      guard selectionRequest == request else { return }
       if let podcastID = item.podcastID {
         if autoPlay {
           await play(episodeID: item.bookID, podcastID: podcastID)
@@ -618,12 +711,13 @@ extension PlayerManager {
 
     queue.removeAll { $0.bookID == item.bookID }
 
-    Task {
-      if let podcastID = item.podcastID {
-        await play(episodeID: item.bookID, podcastID: podcastID)
-      } else {
-        await play(item.bookID)
-      }
+    selectionID = UUID()
+    playItem(item, autoPlay: true)
+  }
+
+  private func restartIfFinished(_ bookID: String) {
+    if let mediaProgress = try? MediaProgress.fetch(bookID: bookID), mediaProgress.isFinished {
+      mediaProgress.currentTime = 0
     }
   }
 

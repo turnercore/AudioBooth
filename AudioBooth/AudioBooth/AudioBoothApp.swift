@@ -30,7 +30,7 @@ struct AudioBoothApp: App {
         .task {
           if libraries.current != nil {
             Task {
-              try? await Audiobookshelf.shared.libraries.fetchFilterData()
+              try? await Audiobookshelf.shared.filterData.fetch()
             }
           }
         }
@@ -45,6 +45,8 @@ struct AudioBoothApp: App {
         SessionManager.shared.syncUnsyncedSessions()
         PodcastAutoQueueManager.shared.refresh()
         KeepOfflineManager.shared.reconcile()
+        KeepOfflineManager.shared.downloadQueuedBooks()
+        WatchConnectivityManager.shared.refreshQueuedWatchDownloads()
 
         if let server = Audiobookshelf.shared.authentication.server, server.status != .connected {
           Task { _ = try? await Audiobookshelf.shared.libraries.fetch() }
@@ -57,8 +59,17 @@ struct AudioBoothApp: App {
     .onChange(of: libraries.current) { _, newValue in
       if newValue != nil {
         Task {
-          try? await Audiobookshelf.shared.libraries.fetchFilterData()
+          try? await Audiobookshelf.shared.filterData.fetch()
         }
+      }
+    }
+    .commands {
+      PlaybackCommands()
+    }
+
+    if #available(iOS 26.0, *) {
+      AssistiveAccess {
+        AssistiveAccessView(model: AssistiveAccessViewModel())
       }
     }
   }

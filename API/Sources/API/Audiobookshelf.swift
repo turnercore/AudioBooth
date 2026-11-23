@@ -1,15 +1,18 @@
 import Foundation
 import Nuke
 
-public final class Audiobookshelf: @unchecked Sendable {
+@MainActor
+public final class Audiobookshelf {
   public static let shared = Audiobookshelf()
 
-  var networkService: NetworkService?
+  nonisolated(unsafe) var networkService: NetworkService?
 
   public lazy var authentication = AuthenticationService(audiobookshelf: self)
   public lazy var libraries = LibrariesService(audiobookshelf: self)
+  public lazy var filterData = FilterDataService(audiobookshelf: self)
   public lazy var sessions = SessionService(audiobookshelf: self)
   public lazy var books = BooksService(audiobookshelf: self)
+  public lazy var progress = ProgressService(audiobookshelf: self)
   public lazy var podcasts = PodcastsService(audiobookshelf: self)
   public lazy var series = SeriesService(audiobookshelf: self)
   public lazy var authors = AuthorsService(audiobookshelf: self)
@@ -18,6 +21,7 @@ public final class Audiobookshelf: @unchecked Sendable {
   public lazy var playlists = PlaylistsService(audiobookshelf: self)
   public lazy var collections = CollectionsService(audiobookshelf: self)
   public lazy var bookmarks = BookmarksService(audiobookshelf: self)
+  public lazy var shares = SharesService(audiobookshelf: self)
   public lazy var networkDiscovery = NetworkDiscoveryService()
   public lazy var misc = MiscService(audiobookshelf: self)
 
@@ -25,15 +29,6 @@ public final class Audiobookshelf: @unchecked Sendable {
 
   private init() {
     setupNetworkService()
-
-    ImagePipeline.shared = ImagePipeline {
-      let configuration = DataLoader.defaultConfiguration
-      configuration.urlCache = nil
-      configuration.httpAdditionalHeaders = authentication.server?.customHeaders
-      $0.dataLoader = DataLoader(configuration: configuration)
-
-      $0.dataCache = try? DataCache(name: "me.jgrenier.audioBS.images")
-    }
   }
 
   public func logout(serverID: String) {
@@ -41,6 +36,8 @@ public final class Audiobookshelf: @unchecked Sendable {
   }
 
   func setupNetworkService() {
+    setupImagePipeline()
+
     guard let server = authentication.server else {
       networkService = nil
       return
@@ -50,18 +47,20 @@ public final class Audiobookshelf: @unchecked Sendable {
 
     networkService = NetworkService(
       server: server
-    ) { [weak self] in
-      guard let self = self,
-        let server = self.authentication.server
-      else { return [:] }
+    ) { [weak server] in
+      guard let server else { return [:] }
 
       let freshToken = try? await server.freshToken
       guard let credentials = freshToken else { return [:] }
 
-      var headers = server.customHeaders
+      var headers = await server.customHeaders
       headers["Authorization"] = credentials.bearer
       return headers
     }
+  }
+
+  func setupImagePipeline() {
+    ImagePipeline.shared = .audioBooth(customHeaders: authentication.server?.customHeaders)
   }
 
   public func switchToServer(_ serverID: String) async throws {

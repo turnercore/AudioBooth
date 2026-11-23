@@ -74,15 +74,17 @@ struct NetworkResponse<T: Decodable> {
   let value: T
 }
 
-final class NetworkService {
+final class NetworkService: @unchecked Sendable {
   private let baseURL: URL?
-  private let headersProvider: () async -> [String: String]
+  private let headersProvider: @Sendable () async -> [String: String]
   private weak var server: Server?
 
-  private let session: URLSessionProtocol = {
+  private static let session: URLSessionProtocol = {
     let config = URLSessionConfiguration.default
     config.timeoutIntervalForRequest = 30
-    config.timeoutIntervalForResource = 60
+    config.timeoutIntervalForResource = 120
+
+    config.httpAdditionalHeaders = ["User-Agent": userAgent]
 
     #if os(watchOS)
     config.timeoutIntervalForResource = 300
@@ -91,13 +93,19 @@ final class NetworkService {
     config.allowsCellularAccess = true
     #endif
 
+    #if os(watchOS)
+    return URLSession(configuration: config)
+    #else
     return URLSessionProxy(configuration: config)
+    #endif
   }()
 
-  private let discretionarySession: URLSessionProtocol = {
+  private static let discretionarySession: URLSessionProtocol = {
     let discretionaryConfig = URLSessionConfiguration.default
     discretionaryConfig.timeoutIntervalForRequest = 30
     discretionaryConfig.timeoutIntervalForResource = 60
+
+    discretionaryConfig.httpAdditionalHeaders = ["User-Agent": userAgent]
 
     #if os(watchOS)
     discretionaryConfig.timeoutIntervalForResource = 300
@@ -113,7 +121,31 @@ final class NetworkService {
     discretionaryConfig.shouldUseExtendedBackgroundIdleMode = true
     #endif
 
+    #if os(watchOS)
+    return URLSession(configuration: discretionaryConfig)
+    #else
     return URLSessionProxy(configuration: discretionaryConfig)
+    #endif
+  }()
+
+  private static let userAgent: String = {
+    let os = ProcessInfo.processInfo.operatingSystemVersion
+    let osVersion = "\(os.majorVersion)_\(os.minorVersion)_\(os.patchVersion)"
+
+    #if targetEnvironment(macCatalyst)
+    let platform = "Macintosh; Mac OS X \(osVersion)"
+    #elseif os(watchOS)
+    let platform = "Apple Watch; watchOS/\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+    #else
+    let platform =
+      Device.identifier.hasPrefix("iPad")
+      ? "iPad; CPU OS \(osVersion) like Mac OS X"
+      : "iPhone; CPU iPhone OS \(osVersion) like Mac OS X"
+    #endif
+
+    let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+
+    return "AudioBooth/\(appVersion) (\(platform))"
   }()
 
   private let decoder: JSONDecoder = {
@@ -129,7 +161,7 @@ final class NetworkService {
   init(
     baseURL: URL? = nil,
     server: Server? = nil,
-    headersProvider: @escaping () async -> [String: String] = { [:] }
+    headersProvider: @escaping @Sendable () async -> [String: String] = { [:] }
   ) {
     self.baseURL = baseURL
     self.server = server
@@ -147,31 +179,44 @@ final class NetworkService {
   ]
 
   func send<T: Decodable>(_ request: NetworkRequest<T>) async throws -> NetworkResponse<T> {
+    let initialMode = await server?.urlMode
+
     do {
       return try await performRequest(request)
     } catch {
       guard let urlError = error as? URLError,
         Self.fallbackURLErrorCodes.contains(urlError.code),
         let server,
-        server.alternativeURL != nil
+        await server.alternativeURL != nil
       else {
         throw error
       }
 
-      let previousMode = server.urlMode
-      server.urlMode = previousMode == .primary ? .fallback : .primary
+      let previousMode = await server.urlMode
+
+      guard previousMode == initialMode else {
+        return try await performRequest(request)
+      }
+
+      let nextMode: Server.URLMode = previousMode == .primary ? .fallback : .primary
+      await MainActor.run { server.urlMode = nextMode }
 
       AppLogger.network.info(
-        "Request failed with network error, retrying with \(server.urlMode == .fallback ? "alternative" : "primary") URL"
+        "Request failed with network error, retrying with \(nextMode == .fallback ? "alternative" : "primary") URL"
       )
 
       do {
         return try await performRequest(request)
       } catch {
-        server.urlMode = previousMode
+        await MainActor.run { server.urlMode = previousMode }
         throw error
       }
     }
+  }
+
+  private func updateStatus(_ status: Server.Status) async {
+    guard let server else { return }
+    await MainActor.run { server.status = status }
   }
 
   private func performRequest<T: Decodable>(_ request: NetworkRequest<T>) async throws -> NetworkResponse<T> {
@@ -181,36 +226,38 @@ final class NetworkService {
       "Sending \(urlRequest.httpMethod ?? "GET") request to: \(urlRequest.url?.absoluteString ?? "unknown")"
     )
 
-    let selectedSession = request.discretionary ? discretionarySession : session
+    let selectedSession = request.discretionary ? Self.discretionarySession : Self.session
 
     do {
       let (data, response) = try await selectedSession.data(for: urlRequest)
 
       guard let httpResponse = response as? HTTPURLResponse else {
         AppLogger.network.error("Received non-HTTP response")
-        server?.status = .connectionError
+        await updateStatus(.connectionError)
         throw NetworkError.invalidResponse
       }
 
       guard 200...299 ~= httpResponse.statusCode else {
         let responseBody = String(data: data, encoding: .utf8) ?? "Unable to decode response body"
         AppLogger.network.error(
-          "HTTP \(httpResponse.statusCode) error. Response body bytes: \(data.count)"
+          "HTTP \(httpResponse.statusCode) error for \(urlRequest.httpMethod ?? "GET") \(urlRequest.url?.absoluteString ?? "unknown"). Response body bytes: \(data.count)"
         )
 
-        if httpResponse.statusCode == 401, let server, server.canAttemptRefresh {
-          server.expireAccessToken()
-          server.status = .connectionError
+        if httpResponse.statusCode == 401, let server, await server.canAttemptRefresh {
+          await MainActor.run {
+            server.expireAccessToken()
+            server.status = .connectionError
+          }
         } else if httpResponse.statusCode == 401 {
-          server?.status = .authenticationError
+          await updateStatus(.authenticationError)
         } else {
-          server?.status = .connectionError
+          await updateStatus(.connectionError)
         }
 
         throw NetworkError.httpError(statusCode: httpResponse.statusCode, message: responseBody)
       }
 
-      server?.status = .connected
+      await updateStatus(.connected)
 
       let decodedValue: T
       if T.self == Data.self {
@@ -258,7 +305,7 @@ final class NetworkService {
     } catch {
       if let urlError = error as? URLError, urlError.code != .cancelled {
         AppLogger.network.error("Network request failed: \(urlError.localizedDescription)")
-        server?.status = .connectionError
+        await updateStatus(.connectionError)
         if urlError.code == .notConnectedToInternet, let url = urlRequest.url, url.isIPAddress {
           throw NetworkError.localNetworkPermission
         }
@@ -272,7 +319,9 @@ final class NetworkService {
   ) async throws
     -> URLRequest
   {
-    guard let baseURL = baseURL ?? server?.activeURL else {
+    let serverURL = await server?.activeURL
+
+    guard let baseURL = baseURL ?? serverURL else {
       throw NetworkError.invalidResponse
     }
 
@@ -320,6 +369,35 @@ private extension URL {
   }
 }
 
+final class RedactedHosts: @unchecked Sendable {
+  static let shared = RedactedHosts()
+
+  private let lock = NSLock()
+  private var primaryHost: String?
+  private var alternativeHost: String?
+
+  func update(primaryHost: String?, alternativeHost: String?) {
+    lock.lock()
+    defer { lock.unlock() }
+    self.primaryHost = primaryHost
+    self.alternativeHost = alternativeHost
+  }
+
+  func replacement(for host: String?) -> String {
+    lock.lock()
+    defer { lock.unlock() }
+
+    guard let host else { return "abs.invalid" }
+
+    if host == alternativeHost {
+      return "abs.alternative"
+    } else if host == primaryHost {
+      return "abs.primary"
+    }
+    return "abs.invalid"
+  }
+}
+
 extension URL {
   public var redacted: URL {
     var components = URLComponents(url: self, resolvingAgainstBaseURL: false)
@@ -330,13 +408,7 @@ extension URL {
   }
 
   static func redactedHost(for host: String?) -> String {
-    let server = Audiobookshelf.shared.authentication.server
-    if let server, host == server.alternativeURL?.host {
-      return "abs.alternative"
-    } else if let server, host == server.baseURL.host {
-      return "abs.primary"
-    }
-    return "abs.invalid"
+    RedactedHosts.shared.replacement(for: host)
   }
 }
 

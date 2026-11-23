@@ -1,7 +1,10 @@
+import Combine
 import Foundation
 
+@MainActor
 public final class PlaylistsService {
   private let audiobookshelf: Audiobookshelf
+  public let didChange = PassthroughSubject<Void, Never>()
 
   init(audiobookshelf: Audiobookshelf) {
     self.audiobookshelf = audiobookshelf
@@ -80,10 +83,14 @@ public final class PlaylistsService {
     )
 
     let response = try await networkService.send(request)
+    didChange.send()
     return response.value
   }
 
-  public func removeItems(playlistID: String, items: [String]) async throws -> Playlist {
+  public func removeItems(
+    playlistID: String,
+    items: [(libraryItemID: String, episodeID: String?)]
+  ) async throws -> Playlist {
     struct PlaylistItem: Codable {
       let libraryItemID: String
       let episodeID: String?
@@ -104,7 +111,7 @@ public final class PlaylistsService {
       )
     }
 
-    let playlistItems = items.map { PlaylistItem(libraryItemID: $0, episodeID: nil) }
+    let playlistItems = items.map { PlaylistItem(libraryItemID: $0.libraryItemID, episodeID: $0.episodeID) }
     let requestBody = RemoveItemsRequest(items: playlistItems)
 
     let request = NetworkRequest<Playlist>(
@@ -114,6 +121,7 @@ public final class PlaylistsService {
     )
 
     let response = try await networkService.send(request)
+    didChange.send()
     return response.value
   }
 
@@ -166,6 +174,7 @@ public final class PlaylistsService {
     )
 
     let response = try await networkService.send(request)
+    didChange.send()
     return response.value
   }
 
@@ -200,6 +209,7 @@ public final class PlaylistsService {
     )
 
     let response = try await networkService.send(request)
+    didChange.send()
     return response.value
   }
 
@@ -243,6 +253,7 @@ public final class PlaylistsService {
     )
 
     let response = try await networkService.send(request)
+    didChange.send()
     return response.value
   }
 
@@ -259,5 +270,6 @@ public final class PlaylistsService {
     )
 
     _ = try await networkService.send(request)
+    didChange.send()
   }
 }

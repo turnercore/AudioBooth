@@ -10,6 +10,18 @@ struct ControlsLayoutPreferencesView: View {
   var body: some View {
     Form {
       Section {
+        Toggle(isOn: $preferences.hidePlayerControlLabels) {
+          PreferenceRow(
+            systemImage: "textformat",
+            tint: .gray,
+            title: "Hide Labels",
+            subtitle: "Show only icons in the player bar"
+          )
+        }
+        .listRowBackground(theme.colors.background.card)
+      }
+
+      Section {
         ForEach(enabledControls) { control in
           controlRow(control)
             .listRowBackground(theme.colors.background.card)
@@ -43,7 +55,7 @@ struct ControlsLayoutPreferencesView: View {
       }
     }
     .scrollContentBackground(.hidden)
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle("Controls & Layout")
     .environment(\.editMode, .constant(.active))
     .onAppear(perform: load)
@@ -56,7 +68,7 @@ struct ControlsLayoutPreferencesView: View {
       PreferenceRow(
         systemImage: control.systemImage,
         tint: control.tint,
-        title: String(localized: control.displayName)
+        title: Text(control.displayName)
       )
       Spacer()
       Toggle(isOn: binding(for: control)) {}
@@ -119,6 +131,8 @@ extension PlayerControl {
     case .history: .blue
     case .volume: .green
     case .equalizer: .red
+    case .lock: .gray
+    case .pageMatch: .teal
     }
   }
 }

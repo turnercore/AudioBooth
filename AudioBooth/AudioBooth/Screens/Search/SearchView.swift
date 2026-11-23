@@ -5,29 +5,26 @@ import SwiftUI
 @available(iOS 26.0, *)
 struct SearchPage: View {
   @StateObject var model: SearchView.Model
-  @FocusState private var fieldFocused: Bool
 
   var body: some View {
     NavigationStack {
       SearchView(model: model)
-        .searchable(text: $model.searchText)
-        .searchFocused($fieldFocused)
-        .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
-        .onAppear {
-          if model.searchText.isEmpty {
-            fieldFocused = true
-          }
-        }
+        .navigationDestinations()
     }
+    .searchable(text: $model.searchText)
   }
 }
 
 struct SearchView: View {
   @ObservedObject var model: Model
+  @Environment(\.appTheme) var theme
+
   var body: some View {
     ScrollView {
       content
     }
+    .frame(maxWidth: .infinity)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .scrollDismissesKeyboard(.interactively)
     .onAppear {
       model.onSearchChanged(model.searchText)
@@ -39,7 +36,7 @@ struct SearchView: View {
 
   @ViewBuilder
   var content: some View {
-    if model.searchText.isEmpty {
+    if !model.hasSearchQuery {
       emptyState
         .containerRelativeFrame(.vertical)
     } else if model.isLoading {
@@ -47,7 +44,7 @@ struct SearchView: View {
         .containerRelativeFrame(.vertical)
     } else if model.books.isEmpty, model.podcasts.isEmpty, model.episodes.isEmpty,
       model.series.isEmpty, model.authors.isEmpty,
-      model.narrators.isEmpty, model.tags.isEmpty, model.genres.isEmpty
+      model.narrators.isEmpty, model.tags.isEmpty, model.genres.isEmpty, model.failedResults.isEmpty
     {
       noResultsState
         .containerRelativeFrame(.vertical)
@@ -95,7 +92,7 @@ struct SearchView: View {
         .font(.headline)
         .foregroundColor(.primary)
 
-      Text("Try adjusting your search terms")
+      Text("Check the spelling or try fewer words")
         .font(.subheadline)
         .foregroundColor(.secondary)
     }
@@ -103,6 +100,10 @@ struct SearchView: View {
 
   var resultsContent: some View {
     LazyVStack(spacing: 24) {
+      if !model.failedResults.isEmpty {
+        failedResultsSection
+      }
+
       if !model.books.isEmpty {
         booksSection
       }
@@ -215,13 +216,19 @@ struct SearchView: View {
   var authorsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Authors")
+        Text(model.authorsAreSuggestions ? "Suggested Authors" : "Authors")
           .font(.title2)
           .fontWeight(.bold)
 
         Spacer()
 
         Text("\(model.authors.count)")
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+
+      if model.authorsAreSuggestions {
+        Label("Close matches", systemImage: "sparkles")
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -233,13 +240,19 @@ struct SearchView: View {
   var narratorsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Narrators")
+        Text(model.narratorsAreSuggestions ? "Suggested Narrators" : "Narrators")
           .font(.title2)
           .fontWeight(.bold)
 
         Spacer()
 
         Text("\(model.narrators.count)")
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+
+      if model.narratorsAreSuggestions {
+        Label("Close matches", systemImage: "sparkles")
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -257,6 +270,56 @@ struct SearchView: View {
         }
       }
     }
+  }
+
+  var failedResultsSection: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label(
+        model.failedResults.count == 1
+          ? "Couldn't show 1 result" : "Couldn't show \(model.failedResults.count) results",
+        systemImage: "exclamationmark.triangle.fill"
+      )
+      .font(.headline)
+      .foregroundStyle(.orange)
+
+      Text("Something unexpected came back from the server. Please report it so it can be fixed.")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+
+      ForEach(Array(model.failedResults.enumerated()), id: \.offset) { _, failure in
+        HStack(alignment: .firstTextBaseline) {
+          Text(failure.title ?? "Unknown item")
+            .font(.subheadline)
+            .lineLimit(1)
+          Text(failure.section)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+
+      HStack(spacing: 16) {
+        Button("Copy Details", systemImage: "doc.on.doc") {
+          UIPasteboard.general.string = failedResultsReport
+          Toast(message: "Copied").show()
+        }
+
+        Link(destination: URL(string: "https://github.com/AudioBooth/AudioBooth/issues")!) {
+          Label("Report", systemImage: "questionmark.bubble")
+        }
+      }
+      .font(.subheadline)
+      .padding(.top, 4)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .background(.orange.opacity(0.1))
+    .clipShape(.rect(cornerRadius: 8))
+  }
+
+  private var failedResultsReport: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    let lines = model.failedResults.map { "- \($0.section): \($0.title ?? "unknown") (\($0.reason))" }
+    return (["AudioBooth \(version): search results that failed to decode"] + lines).joined(separator: "\n")
   }
 
   var tagsSection: some View {
@@ -331,6 +394,13 @@ extension SearchView {
     var narrators: [String] = []
     var tags: [String] = []
     var genres: [String] = []
+    var failedResults: [SearchResponse.FailedResult] = []
+    var authorsAreSuggestions = false
+    var narratorsAreSuggestions = false
+
+    var hasSearchQuery: Bool {
+      !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     func onSearchChanged(_ searchText: String) {}
   }

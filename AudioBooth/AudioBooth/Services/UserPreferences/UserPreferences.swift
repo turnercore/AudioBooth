@@ -1,6 +1,7 @@
 import API
 import Combine
 import Foundation
+import Network
 import SwiftUI
 
 final class UserPreferences: ObservableObject {
@@ -11,6 +12,9 @@ final class UserPreferences: ObservableObject {
 
   @AppStorage("playerControls")
   var playerControls: [PlayerControl] = PlayerControl.default
+
+  @AppStorage("hidePlayerControlLabels")
+  var hidePlayerControlLabels: Bool = false
 
   @AppStorage("autoDownloadBooks")
   var autoDownloadBooks: AutoDownloadMode = .off
@@ -60,6 +64,9 @@ final class UserPreferences: ObservableObject {
   @AppStorage("timerFadeOut")
   var timerFadeOut: Double = 30.0
 
+  @AppStorage("timerPauseBehavior")
+  var timerPauseBehavior: TimerPauseBehavior = .none
+
   @AppStorage("alarmFadeOut")
   var alarmFadeOut: Double = 10.0
 
@@ -93,11 +100,26 @@ final class UserPreferences: ObservableObject {
   @AppStorage("hideChapterSkipButtons")
   var hideChapterSkipButtons: Bool = false
 
+  @AppStorage("coverColorProgressBar")
+  var coverColorProgressBar: Bool = true
+
+  @AppStorage("playerBackgroundStyle")
+  var playerBackgroundStyle: PlayerBackgroundStyle = .solid
+
+  @AppStorage("showSystemVolumeSlider")
+  var showSystemVolumeSlider: Bool = false
+
   @AppStorage("keepScreenAwakeInPlayer")
   var keepScreenAwakeInPlayer: Bool = false
 
+  @AppStorage("positionSyncOffers")
+  var positionSyncOffers: Bool = true
+
   @AppStorage("mixWithOtherAudio")
   var mixWithOtherAudio: Bool = false
+
+  @AppStorage("pauseAtZeroVolume")
+  var pauseAtZeroVolume: Bool = true
 
   @AppStorage("volumeLevel")
   var volumeLevel: Double = 1.0
@@ -129,11 +151,20 @@ final class UserPreferences: ObservableObject {
   @AppStorage("cardCoverBorderWidth")
   var cardCoverBorderWidth: CardBorderWidth = .small
 
+  @AppStorage("dimCoverWhenCompleted")
+  var dimCoverWhenCompleted: Bool = true
+
   @AppStorage("showContinueTimeRemaining")
   var showContinueTimeRemaining: Bool = true
 
   @AppStorage("groupSeriesInOffline")
   var groupSeriesInOffline: Bool = false
+
+  @AppStorage("offlineSortOrder")
+  var offlineSortOrder: OfflineListView.Model.SortOrder = .manual
+
+  @AppStorage("offlineSortAscending")
+  var offlineSortAscending: Bool = true
 
   @AppStorage("librarySortBy")
   var librarySortBy: SortBy = .title
@@ -141,8 +172,14 @@ final class UserPreferences: ObservableObject {
   @AppStorage("librarySortAscending")
   var librarySortAscending: Bool = true
 
+  @AppStorage("bookmarkSortBy")
+  var bookmarkSortBy: BookmarkViewerSheet.Model.SortBy = .time
+
+  @AppStorage("bookmarkSortAscending")
+  var bookmarkSortAscending: Bool = true
+
   @AppStorage("libraryFilter")
-  var libraryFilter: LibraryPageModel.Filter = .all
+  var libraryFilter: FilterPicker.Model.Filter = .all
 
   @AppStorage("showNFCTagWriting")
   var showNFCTagWriting: Bool = false
@@ -165,6 +202,9 @@ final class UserPreferences: ObservableObject {
   @AppStorage("autoTimerWindowEnd")
   var autoTimerWindowEnd: Int = 6 * 60
 
+  @AppStorage("autoTimerTrigger")
+  var autoTimerTrigger: AutoTimerTrigger = .timeWindow
+
   @AppStorage("playerOrientation")
   var playerOrientation: PlayerOrientation = .auto
 
@@ -186,8 +226,14 @@ final class UserPreferences: ObservableObject {
   @AppStorage("autoPlayNextInQueue")
   var autoPlayNextInQueue: Bool = true
 
-  @AppStorage("smartContinuePlayback")
-  var smartContinuePlayback: Bool = true
+  @AppStorage("continueNextInSeries")
+  var continueNextInSeries: Bool = true
+
+  @AppStorage("continueNextDownloadedBook")
+  var continueNextDownloadedBook: Bool = true
+
+  @AppStorage("continueNextPodcastEpisode")
+  var continueNextPodcastEpisode: Bool = true
 
   @AppStorage("podcastAutoQueueSettings")
   var podcastAutoQueueSettings: PodcastAutoQueueStore = .init()
@@ -219,6 +265,9 @@ final class UserPreferences: ObservableObject {
   @AppStorage("openPlayerOnLaunch")
   var openPlayerOnLaunch: Bool = false
 
+  @AppStorage("assistedPlayer")
+  var assistedPlayer: Bool = false
+
   @AppStorage("hapticsEnabled")
   var hapticsEnabled: Bool = true
 
@@ -245,6 +294,8 @@ final class UserPreferences: ObservableObject {
     migrateShakeToExtendTimer()
     migrateAutoTimerDuration()
     migrateVolumeBoost()
+    migrateSmartContinuePlayback()
+    migrateOfflineSortOrder()
     setupCloudSync()
   }
 
@@ -278,6 +329,30 @@ final class UserPreferences: ObservableObject {
       if duration > 0 {
         autoTimerMode = .duration(duration)
       }
+    }
+  }
+
+  private func migrateSmartContinuePlayback() {
+    guard UserDefaults.standard.object(forKey: "smartContinuePlayback") is Bool else { return }
+
+    let wasEnabled = UserDefaults.standard.bool(forKey: "smartContinuePlayback")
+    UserDefaults.standard.removeObject(forKey: "smartContinuePlayback")
+
+    continueNextInSeries = wasEnabled
+    continueNextDownloadedBook = wasEnabled
+    continueNextPodcastEpisode = wasEnabled
+  }
+
+  private func migrateOfflineSortOrder() {
+    switch UserDefaults.standard.string(forKey: "offlineSortOrder") {
+    case "newest":
+      offlineSortOrder = .downloadDate
+      offlineSortAscending = false
+    case "oldest":
+      offlineSortOrder = .downloadDate
+      offlineSortAscending = true
+    default:
+      break
     }
   }
 
@@ -336,11 +411,19 @@ enum AutoDownloadMode: String, CaseIterable, Codable {
   case wifiOnly
   case wifiAndCellular
 
-  var displayName: String {
+  var displayName: LocalizedStringResource {
     switch self {
     case .off: "Off"
     case .wifiOnly: "Wi-Fi Only"
     case .wifiAndCellular: "Wi-Fi & Cellular"
+    }
+  }
+
+  var isNetworkAllowed: Bool {
+    switch self {
+    case .off: false
+    case .wifiOnly: NetworkMonitor.shared.interfaceType == .wifi
+    case .wifiAndCellular: NetworkMonitor.shared.isConnected
     }
   }
 }
@@ -401,7 +484,7 @@ enum ShakeSensitivity: String, CaseIterable {
     self != .off
   }
 
-  var displayText: String {
+  var displayText: LocalizedStringResource {
     switch self {
     case .off: "Off"
     case .veryLow: "Very Low"
@@ -450,16 +533,69 @@ extension AutoTimerMode: RawRepresentable {
   }
 }
 
+enum AutoTimerTrigger: String, CaseIterable {
+  case timeWindow
+  case focus
+  case either
+
+  var displayText: LocalizedStringResource {
+    switch self {
+    case .timeWindow: "Time Window"
+    case .focus: "Focus"
+    case .either: "Either"
+    }
+  }
+}
+
+enum TimerPauseBehavior: String, CaseIterable {
+  case none
+  case pause
+  case reset
+  case off
+
+  var displayText: LocalizedStringResource {
+    switch self {
+    case .none: "None"
+    case .pause: "Pause"
+    case .reset: "Reset"
+    case .off: "Off"
+    }
+  }
+
+  var explanation: LocalizedStringResource {
+    switch self {
+    case .none: "Timer keeps counting down while playback is paused."
+    case .pause: "Timer pauses with playback and resumes on play."
+    case .reset: "Timer stops with playback and restarts in full on play."
+    case .off: "Pausing playback turns the sleep timer off."
+    }
+  }
+}
+
 enum PlayerOrientation: String, CaseIterable {
   case auto
   case portrait
   case landscape
 
-  var displayText: String {
+  var displayText: LocalizedStringResource {
     switch self {
     case .auto: "Auto"
     case .portrait: "Portrait"
     case .landscape: "Landscape"
+    }
+  }
+}
+
+enum PlayerBackgroundStyle: String, CaseIterable {
+  case gradient
+  case solid
+  case off
+
+  var displayText: LocalizedStringResource {
+    switch self {
+    case .gradient: "Gradient"
+    case .solid: "Solid"
+    case .off: "Off"
     }
   }
 }
@@ -494,7 +630,7 @@ struct EqualizerSettings: Equatable, RawRepresentable {
   init(
     isEnabled: Bool = false,
     preamp: Float = 0,
-    bandGains: [Float] = [Float](repeating: 0, count: 6)
+    bandGains: [Float] = [Float](repeating: 0, count: 7)
   ) {
     self.isEnabled = isEnabled
     self.preamp = preamp
@@ -506,8 +642,10 @@ struct EqualizerSettings: Equatable, RawRepresentable {
     guard parts.count == 3 else { return nil }
     self.isEnabled = parts[0] == "1"
     self.preamp = Float(parts[1]) ?? 0
-    self.bandGains = parts[2].components(separatedBy: ",").compactMap { Float($0) }
-    guard bandGains.count == 6 else { return nil }
+    var gains = parts[2].components(separatedBy: ",").compactMap { Float($0) }
+    if gains.count == 6 { gains.insert(0, at: 5) }
+    guard gains.count == 7 else { return nil }
+    self.bandGains = gains
   }
 
   var rawValue: String {
@@ -517,7 +655,7 @@ struct EqualizerSettings: Equatable, RawRepresentable {
   }
 }
 
-enum LevelingStrength: Int, CaseIterable, Identifiable {
+enum LevelingStrength: Int, CaseIterable, Identifiable, Codable {
   case off
   case low
   case medium
@@ -538,11 +676,13 @@ enum LevelingStrength: Int, CaseIterable, Identifiable {
 enum ContinueListeningStyle: String, CaseIterable {
   case carousel
   case coverFlow
+  case poster
 
   var displayText: LocalizedStringResource {
     switch self {
     case .carousel: "Carousel"
     case .coverFlow: "Cover Flow"
+    case .poster: "Poster"
     }
   }
 }
@@ -553,6 +693,14 @@ enum ContinueSectionSize: Int, CaseIterable {
   case extraLarge = 200
 
   var value: CGFloat { CGFloat(rawValue) }
+
+  var posterWidth: CGFloat {
+    switch self {
+    case .default: 200
+    case .large: 240
+    case .extraLarge: 280
+    }
+  }
 
   var displayText: LocalizedStringResource {
     switch self {

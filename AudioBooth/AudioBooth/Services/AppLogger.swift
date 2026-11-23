@@ -5,16 +5,18 @@ import Pulse
 import PulseLogHandler
 import UIKit
 
-enum AppLogger {
+nonisolated enum AppLogger {
   static let session = Logger(label: "session")
   static let watchConnectivity = Logger(label: "watch-connectivity")
   static let player = Logger(label: "player")
   static let download = Logger(label: "download")
   static let viewModel = Logger(label: "viewModel")
+  static let readAlong = Logger(label: "read-along")
   static let general = Logger(label: "general")
   static let authentication = Logger(label: "authentication")
   static let crash = Logger(label: "crash")
 
+  @MainActor
   static func bootstrap() {
     configureNetworkLogger()
 
@@ -32,12 +34,13 @@ enum AppLogger {
     }
 
     general.info("Version \(UIApplication.appVersion)")
+    general.info("Device \(Device.model)")
   }
 
   private static func configureNetworkLogger() {
     NetworkLogger.shared = NetworkLogger { config in
-      config.sensitiveHeaders = ["Authorization", "x-refresh-token"]
-      config.sensitiveQueryItems = ["token"]
+      config.sensitiveHeaders = ["*"]
+      config.sensitiveQueryItems = ["token", "code", "code_verifier"]
       config.sensitiveDataFields = [
         "accessToken",
         "authOpenIDAuthorizationURL",
@@ -47,8 +50,10 @@ enum AppLogger {
         "authOpenIDTokenURL",
         "authOpenIDUserInfoURL",
         "email",
+        "password",
         "refreshToken",
         "token",
+        "username",
       ]
       config.willHandleEvent = { $0.redacted }
     }

@@ -18,13 +18,17 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   private let speed: FloatPickerSheet.Model
   private let alarmNotificationService = AlarmNotificationService()
 
+  private static var carriedEndDate: Date?
+
   private var sleepTimer: Timer?
   private var alarmTimer: Timer?
+  private var autoTimerWindowTimer: Timer?
   private var alarmSoundPlayer: AVAudioPlayer?
   private var originalTimerDuration: TimeInterval = 0
+  private var suppressAutoTimerActivation = false
   private var lastObservedChapterIndex: Int = 0
   private var cancellables = Set<AnyCancellable>()
-  private var liveActivityCleanupTask: Task<Void, Never>?
+  private var outputVolumeObservation: NSKeyValueObservation?
   #if !targetEnvironment(macCatalyst)
   private var liveActivity: Activity<SleepTimerActivityAttributes>?
   #endif
@@ -48,7 +52,22 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
     ShakeDetector.shared.stopMonitoring()
     setupShakeObserver()
+    setupVolumeObserver()
     observeChapterChanges()
+
+    if let remaining = Self.carriedEndDate?.timeIntervalSinceNow, remaining > 1 {
+      current = .preset(remaining)
+      startSleepTimer(duration: remaining)
+      fadeOut(remaining)
+    }
+    Self.carriedEndDate = nil
+  }
+
+  isolated deinit {
+    sleepTimer?.invalidate()
+    alarmTimer?.invalidate()
+    autoTimerWindowTimer?.invalidate()
+    endLiveActivity()
   }
 
   private func setupShakeObserver() {
@@ -57,6 +76,25 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
         self?.onShakeDetected()
       }
       .store(in: &cancellables)
+  }
+
+  private func setupVolumeObserver() {
+    outputVolumeObservation = AVAudioSession.sharedInstance().observe(
+      \.outputVolume,
+      options: [.old, .new]
+    ) { [weak self] _, change in
+      guard let self, let oldValue = change.oldValue, let newValue = change.newValue, newValue > oldValue else {
+        return
+      }
+      Task { @MainActor in
+        self.onVolumeUp()
+      }
+    }
+  }
+
+  private func onVolumeUp() {
+    guard isFading else { return }
+    restartTimer(source: "volume up during fade")
   }
 
   private func observeChapterChanges() {
@@ -111,9 +149,45 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     onStartTimerTapped()
   }
 
+  override func onAddTimeTapped(_ minutes: Int) {
+    let additional = TimeInterval(minutes * 60)
+
+    let newRemaining: TimeInterval
+    switch current {
+    case .preset(let seconds):
+      newRemaining = seconds + additional
+      current = .preset(newRemaining)
+    case .custom(let seconds):
+      newRemaining = seconds + additional
+      current = .custom(newRemaining)
+    case .chapters, .atTime, .duration, .none:
+      return
+    }
+
+    player.volume = Float(preferences.volumeLevel)
+    startLiveActivity(duration: newRemaining)
+    PlaybackHistory.record(itemID: itemID, action: .timerExtended, position: player.time)
+    AppLogger.player.info("Sleep timer extended by \(minutes) minutes")
+  }
+
   override func onChaptersChanged(_ value: Int) {
     selected = .chapters(value)
     updateEstimatedEndTime(for: value)
+  }
+
+  override func onRunningChaptersChanged(_ value: Int) {
+    guard case .chapters(let count) = current, value >= 1, value <= maxRemainingChapters else { return }
+
+    current = .chapters(value)
+
+    if let duration = calculateChapterDuration(for: value) {
+      startLiveActivity(duration: duration)
+    }
+
+    if value > count {
+      PlaybackHistory.record(itemID: itemID, action: .timerExtended, position: player.time)
+    }
+    AppLogger.player.info("Chapter timer changed to \(value) chapters")
   }
 
   private func updateEstimatedEndTime(for chapterCount: Int) {
@@ -157,16 +231,19 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   override func onOffSelected() {
+    suppressAutoTimerActivation = true
     selected = .none
     current = .none
     completedAlert = nil
     estimatedEndTime = nil
+    player.volume = Float(preferences.volumeLevel)
     stopSleepTimer()
     endLiveActivity()
     isPresented = false
   }
 
   override func onStartTimerTapped() {
+    suppressAutoTimerActivation = false
     current = selected
     switch selected {
     case .preset(let duration):
@@ -190,7 +267,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     }
   }
 
-  private func calculateChapterDuration(for chapterCount: Int) -> TimeInterval? {
+  func calculateChapterDuration(for chapterCount: Int) -> TimeInterval? {
     guard let chapters, chapterCount > 0 else { return nil }
 
     let currentTime = player.time
@@ -220,6 +297,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
   private func startSleepTimer(duration: TimeInterval) {
     stopSleepTimer()
+    suppressAutoTimerActivation = false
     originalTimerDuration = duration
 
     sleepTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -234,6 +312,21 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     startLiveActivity(duration: duration)
   }
 
+  func handOffToNextItem() -> Bool {
+    switch current {
+    case .preset(let seconds), .custom(let seconds):
+      Self.carriedEndDate = Date().addingTimeInterval(seconds)
+      stopSleepTimer()
+      current = .none
+      player.volume = Float(preferences.volumeLevel)
+      return true
+    case .chapters:
+      return false
+    case .atTime, .duration, .none:
+      return true
+    }
+  }
+
   private func stopSleepTimer() {
     sleepTimer?.invalidate()
     sleepTimer = nil
@@ -244,6 +337,21 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   private func updateSleepTimer() {
+    if !player.isPlaying {
+      switch preferences.timerPauseBehavior {
+      case .none:
+        break
+      case .pause:
+        return
+      case .reset:
+        resetTimerToOriginalDuration()
+        return
+      case .off:
+        cancelTimerForPause()
+        return
+      }
+    }
+
     switch current {
     case .preset(let seconds):
       if seconds > 1 {
@@ -275,6 +383,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 
   private func pauseFromTimer() {
     let duration = originalTimerDuration
+    suppressAutoTimerActivation = true
 
     PlaybackHistory.record(itemID: itemID, action: .timerCompleted, position: player.time)
     player.pause()
@@ -298,7 +407,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     sleepTimer = nil
 
     pauseLiveActivity(remaining: originalTimerDuration)
-    scheduleLiveActivityCleanup()
+    SleepTimerActivityCleanup.shared.schedule(for: .expired)
 
     AppLogger.player.info("Timer expired - playback paused")
   }
@@ -330,6 +439,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   private func resetTimerFromAlert() {
+    suppressAutoTimerActivation = true
     completedAlert = nil
     current = .none
     sleepTimer?.invalidate()
@@ -343,6 +453,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
   }
 
   func pauseFromChapterTimer() {
+    suppressAutoTimerActivation = true
     PlaybackHistory.record(itemID: itemID, action: .timerCompleted, position: player.time)
     player.pause()
 
@@ -359,7 +470,8 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     }
 
     current = .none
-    scheduleLiveActivityCleanup()
+    pauseLiveActivity(remaining: 0)
+    SleepTimerActivityCleanup.shared.schedule(for: .expired)
     AppLogger.player.info("Chapter timer expired - playback paused")
   }
 
@@ -397,16 +509,87 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     }
   }
 
+  func onPlaybackResumeRequested() {
+    guard suppressAutoTimerActivation else { return }
+    resetTimerFromAlert()
+    AppLogger.player.info("Cleared sleep timer state before resuming playback")
+  }
+
   func activateAutoTimerIfNeeded() {
     let mode = preferences.autoTimerMode
+    let trigger = preferences.autoTimerTrigger
 
-    guard mode != .off,
+    guard mode != .off, current == .none, !suppressAutoTimerActivation else { return }
+
+    if trigger != .focus {
+      if isInAutoTimerWindow() {
+        startAutoTimer(mode: mode)
+        return
+      }
+      scheduleAutoTimerAtWindowStart()
+    }
+
+    guard trigger != .timeWindow else { return }
+
+    Task { [weak self] in
+      guard await FocusFilterIntent.isActive else { return }
+      guard let self, self.current == .none, !self.suppressAutoTimerActivation else { return }
+      self.startAutoTimer(mode: self.preferences.autoTimerMode)
+    }
+  }
+
+  private func scheduleAutoTimerAtWindowStart() {
+    autoTimerWindowTimer?.invalidate()
+
+    let startMinutes = preferences.autoTimerWindowStart
+    let components = DateComponents(hour: startMinutes / 60, minute: startMinutes % 60)
+    guard
+      let fireDate = Calendar.current.nextDate(after: Date(), matching: components, matchingPolicy: .nextTime)
+    else { return }
+
+    autoTimerWindowTimer = Timer.scheduledTimer(
+      withTimeInterval: fireDate.timeIntervalSinceNow,
+      repeats: false
+    ) { [weak self] _ in
+      guard let self else { return }
+      self.activateWindowTimer()
+    }
+  }
+
+  private func activateWindowTimer() {
+    guard preferences.autoTimerMode != .off,
+      preferences.autoTimerTrigger != .focus,
       current == .none,
+      player.isPlaying,
       isInAutoTimerWindow()
     else {
       return
     }
 
+    AppLogger.player.info("Time window started during playback - starting auto-timer")
+    startAutoTimer(mode: preferences.autoTimerMode)
+  }
+
+  func activateFocusTimer() {
+    guard preferences.autoTimerMode != .off,
+      current == .none,
+      !suppressAutoTimerActivation,
+      player.isPlaying
+    else {
+      return
+    }
+
+    AppLogger.player.info("Focus enabled during playback - starting auto-timer")
+    startAutoTimer(mode: preferences.autoTimerMode)
+  }
+
+  private func startAutoTimer(mode: AutoTimerMode) {
+    guard !AVAudioSession.sharedInstance().isCarPlayConnected else {
+      AppLogger.player.info("CarPlay is connected - skipping auto-timer")
+      return
+    }
+
+    suppressAutoTimerActivation = false
     let position = player.time
 
     switch mode {
@@ -429,8 +612,70 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     }
   }
 
+  private func resetTimerToOriginalDuration() {
+    guard originalTimerDuration > 0 else { return }
+
+    switch current {
+    case .preset(let seconds):
+      guard seconds != originalTimerDuration else { return }
+      current = .preset(originalTimerDuration)
+    case .custom(let seconds):
+      guard seconds != originalTimerDuration else { return }
+      current = .custom(originalTimerDuration)
+    case .chapters, .atTime, .duration, .none:
+      return
+    }
+
+    player.volume = Float(preferences.volumeLevel)
+    pauseLiveActivity()
+  }
+
+  private func cancelTimerForPause() {
+    switch current {
+    case .preset, .custom:
+      current = .none
+      stopSleepTimer()
+      player.volume = Float(preferences.volumeLevel)
+    case .chapters, .atTime, .duration, .none:
+      break
+    }
+  }
+
   func onShakeDetected() {
-    guard preferences.shakeSensitivity.isEnabled, originalTimerDuration > 0 else { return }
+    guard preferences.shakeSensitivity.isEnabled else { return }
+    restartTimer(source: "shake")
+  }
+
+  override func extendIfNeeded() -> Bool {
+    if let completedAlert {
+      if completedAlert.isExpired {
+        completedAlert.onResetTapped()
+      } else if preferences.shakeSensitivity.isEnabled {
+        completedAlert.onExtendTapped()
+        return true
+      }
+      return false
+    }
+
+    guard isFading else { return false }
+    restartTimer(source: "remote command during fade")
+    return true
+  }
+
+  private var isFading: Bool {
+    let fadeOut = preferences.timerFadeOut
+    guard player.isPlaying, fadeOut > 0 else { return false }
+
+    switch current {
+    case .preset(let seconds), .custom(let seconds):
+      return seconds < fadeOut
+    case .chapters, .atTime, .duration, .none:
+      return false
+    }
+  }
+
+  private func restartTimer(source: String) {
+    guard originalTimerDuration > 0 else { return }
 
     player.volume = Float(preferences.volumeLevel)
 
@@ -438,15 +683,15 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
     case .preset:
       current = .preset(originalTimerDuration)
       startSleepTimer(duration: originalTimerDuration)
-      AppLogger.player.info("Preset timer reset to \(originalTimerDuration) seconds via shake")
+      AppLogger.player.info("Preset timer reset to \(originalTimerDuration) seconds via \(source)")
 
     case .custom:
       current = .custom(originalTimerDuration)
       startSleepTimer(duration: originalTimerDuration)
-      AppLogger.player.info("Custom timer reset to \(originalTimerDuration) seconds via shake")
+      AppLogger.player.info("Custom timer reset to \(originalTimerDuration) seconds via \(source)")
 
     case .chapters:
-      AppLogger.player.debug("Shake detected during chapter timer - no reset action")
+      AppLogger.player.debug("Reset via \(source) during chapter timer - no reset action")
 
     case .atTime, .duration, .none:
       break
@@ -590,8 +835,7 @@ final class TimerPickerSheetViewModel: TimerPickerSheet.Model {
 extension TimerPickerSheetViewModel {
   #if !targetEnvironment(macCatalyst)
   func startLiveActivity(duration: TimeInterval) {
-    liveActivityCleanupTask?.cancel()
-    liveActivityCleanupTask = nil
+    SleepTimerActivityCleanup.shared.cancel()
 
     let endTime = Date().addingTimeInterval(duration)
     let state = SleepTimerActivityAttributes.ContentState(
@@ -632,8 +876,7 @@ extension TimerPickerSheetViewModel {
   }
 
   func endLiveActivity() {
-    liveActivityCleanupTask?.cancel()
-    liveActivityCleanupTask = nil
+    SleepTimerActivityCleanup.shared.cancel()
 
     guard let liveActivity else { return }
 
@@ -644,30 +887,21 @@ extension TimerPickerSheetViewModel {
     self.liveActivity = nil
   }
 
-  func scheduleLiveActivityCleanup() {
-    liveActivityCleanupTask?.cancel()
-    liveActivityCleanupTask = Task {
-      do {
-        try await Task.sleep(for: .seconds(300))
-        guard !Task.isCancelled else { return }
-        endLiveActivity()
-        AppLogger.player.info("Live Activity cleaned up after 5 minutes of inactivity")
-      } catch {
-        AppLogger.player.debug("Live Activity cleanup task cancelled")
-      }
-    }
-  }
-
   func pauseLiveActivity(remaining: TimeInterval? = nil) {
     guard liveActivity != nil else { return }
 
     let remainingTime: TimeInterval
     if let remaining {
       remainingTime = remaining
-    } else if case .chapters(let count) = current {
-      remainingTime = calculateChapterDuration(for: count) ?? 0
     } else {
-      remainingTime = 0
+      switch current {
+      case .preset(let seconds), .custom(let seconds):
+        remainingTime = seconds
+      case .chapters(let count):
+        remainingTime = calculateChapterDuration(for: count) ?? 0
+      case .atTime, .duration, .none:
+        remainingTime = 0
+      }
     }
 
     let state = SleepTimerActivityAttributes.ContentState(
@@ -675,7 +909,19 @@ extension TimerPickerSheetViewModel {
       accentColor: preferences.accentColor
     )
     updateLiveActivity(state)
+    SleepTimerActivityCleanup.shared.schedule(for: .paused)
   }
+
+  func pauseLiveActivityIfNeeded() {
+    switch current {
+    case .preset, .custom:
+      guard preferences.timerPauseBehavior != .none else { return }
+    case .chapters, .atTime, .duration, .none:
+      break
+    }
+    pauseLiveActivity()
+  }
+
   func resumeLiveActivityIfNeeded() {
     guard liveActivity != nil else { return }
 
@@ -695,13 +941,14 @@ extension TimerPickerSheetViewModel {
       accentColor: preferences.accentColor
     )
     updateLiveActivity(state)
+    SleepTimerActivityCleanup.shared.cancel()
   }
   #else
   func startLiveActivity(duration: TimeInterval) {}
   func updateLiveActivity(_ state: Any) {}
   func endLiveActivity() {}
   func pauseLiveActivity(remaining: TimeInterval? = nil) {}
-  func scheduleLiveActivityCleanup() {}
+  func pauseLiveActivityIfNeeded() {}
   func resumeLiveActivityIfNeeded() {}
   #endif
 }

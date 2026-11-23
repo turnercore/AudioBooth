@@ -27,6 +27,12 @@ extension Personalized {
     }
     public let entities: Entities
 
+    public init(id: String, label: String, entities: Entities) {
+      self.id = id
+      self.label = label
+      self.entities = entities
+    }
+
     public init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
 

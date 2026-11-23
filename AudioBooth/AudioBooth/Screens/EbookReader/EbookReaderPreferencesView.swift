@@ -3,6 +3,7 @@ import SwiftUI
 struct EbookReaderPreferencesView: View {
   @Environment(\.appTheme) var theme
   @ObservedObject var preferences: EbookReaderPreferences
+  var hasHinge = false
   var onEditZones: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
 
@@ -38,6 +39,12 @@ struct EbookReaderPreferencesView: View {
             }
           }
 
+          Picker("Text Alignment", selection: $preferences.textAlign) {
+            ForEach(EbookReaderPreferences.TextAlign.allCases) { align in
+              Text(align.rawValue).tag(align)
+            }
+          }
+
           Toggle("Text Normalization", isOn: $preferences.textNormalization)
         }
         .listRowBackground(theme.colors.background.card)
@@ -59,6 +66,8 @@ struct EbookReaderPreferencesView: View {
               }
             }
           }
+          Toggle("Progress Header", isOn: $preferences.showProgressHeader)
+
           Toggle("Tap to Navigate", isOn: $preferences.tapToNavigate)
 
           Toggle("Volume to Navigate", isOn: $preferences.useVolumeButtonsForPageTurn)
@@ -89,6 +98,23 @@ struct EbookReaderPreferencesView: View {
               Text(margins.rawValue).tag(margins)
             }
           }
+
+          if hasHinge {
+            Toggle("Show Cover When Closed", isOn: $preferences.showCoverWhenClosed)
+          }
+        }
+        .listRowBackground(theme.colors.background.card)
+
+        Section {
+          Toggle("Follow the Narrator", isOn: $preferences.readAlongFollowsNarration)
+          Toggle("Highlight Each Word", isOn: $preferences.readAlongHighlightsWord)
+          Toggle("Highlight Sentence", isOn: $preferences.readAlongHighlightsSentence)
+        } header: {
+          Text("Read Along")
+        } footer: {
+          Text(
+            "Read Along listens to the audiobook and highlights the passage being narrated. Turning off Follow the Narrator keeps the highlight but leaves the page where you put it."
+          )
         }
         .listRowBackground(theme.colors.background.card)
 
@@ -97,6 +123,11 @@ struct EbookReaderPreferencesView: View {
             ForEach(EbookReaderPreferences.Theme.allCases) { theme in
               Text(theme.rawValue).tag(theme)
             }
+          }
+
+          if preferences.theme == .custom {
+            ColorPicker("Background Color", selection: $preferences.customBackgroundColor, supportsOpacity: false)
+            ColorPicker("Text Color", selection: $preferences.customTextColor, supportsOpacity: false)
           }
         }
         .listRowBackground(theme.colors.background.card)
@@ -154,7 +185,7 @@ struct EbookReaderPreferencesView: View {
         .listRowBackground(theme.colors.background.card)
       }
       .scrollContentBackground(.hidden)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
       .navigationTitle("Reader Settings")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

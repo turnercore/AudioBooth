@@ -4,6 +4,7 @@ import Foundation
 import Logging
 import Models
 import Nuke
+import SwiftData
 import SwiftUI
 
 final class BookDetailsViewModel: BookDetailsView.Model {
@@ -13,6 +14,7 @@ final class BookDetailsViewModel: BookDetailsView.Model {
   private var downloadManager: DownloadManager { .shared }
   private var playerManager: PlayerManager { .shared }
   private var authenticationService: AuthenticationService { Audiobookshelf.shared.authentication }
+  private var watchConnectivityManager: WatchConnectivityManager { .shared }
 
   private var cancellables = Set<AnyCancellable>()
   private var progressObservation: Task<Void, Never>?
@@ -47,15 +49,22 @@ final class BookDetailsViewModel: BookDetailsView.Model {
   }
 
   override func onAppear() {
+    progressObservation?.cancel()
+    itemObservation?.cancel()
+    cancellables.removeAll()
+
     Task {
       await loadLocalBook()
       await loadBookFromAPI()
     }
+
     setupDownloadStateBinding()
+    setupNarrationObservation()
     setupProgressObservation()
     setupItemObservation()
     setupPlayerStateObservation()
     setupQueueObservation()
+    setupWatchObservation()
   }
 
   private func loadLocalBook() async {
@@ -119,26 +128,14 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     }
   }
 
-  private func refreshCover() {
-    Task {
-      do {
-        let request = ImageRequest(url: coverURL, options: .reloadIgnoringCachedData)
-        let image = try await ImagePipeline.shared.image(for: request)
-        shareCoverImage = Image(uiImage: image)
-        let coverURL = self.coverURL
-        self.coverURL = nil
-        Task { @MainActor in
-          self.coverURL = coverURL
-        }
-      } catch {
-        AppLogger.viewModel.debug("Failed to refresh cover: \(error)")
-      }
+  override var shareCoverImage: Image? {
+    guard let container = ImagePipeline.shared.cache.cachedImage(for: ImageRequest(url: coverURL)) else {
+      return nil
     }
+    return Image(uiImage: container.image)
   }
 
   private func loadBookFromAPI() async {
-    refreshCover()
-
     do {
       let book = try await booksService.fetch(id: bookID)
       self.book = book
@@ -188,14 +185,10 @@ final class BookDetailsViewModel: BookDetailsView.Model {
         flags.insert(.abridged)
       }
 
+      let narrationBook = localBook?.hasImportedNarration == true ? localBook : nil
       let currentTime = mediaProgress?.currentTime ?? 0
-      let chapters: [ChaptersContent.Chapter]?
-      if let apiChapters = book.chapters {
-        let modelChapters = apiChapters.map(Models.Chapter.init(from:))
-        chapters = convertChapters(modelChapters, currentTime: currentTime)
-      } else {
-        chapters = nil
-      }
+      let modelChapters = narrationBook?.chapters ?? book.chapters?.map(Models.Chapter.init(from:))
+      let chapters = modelChapters.map { convertChapters($0, currentTime: currentTime) }
 
       updateUI(
         title: book.title,
@@ -204,9 +197,9 @@ final class BookDetailsViewModel: BookDetailsView.Model {
         narrators: narrators,
         series: series,
         coverURL: book.coverURL(raw: true),
-        duration: book.duration,
+        duration: narrationBook?.duration ?? book.duration,
         size: book.size,
-        hasAudio: book.mediaType.contains(.audiobook),
+        hasAudio: narrationBook != nil || book.mediaType.contains(.audiobook),
         isEbook: book.mediaType.contains(.ebook),
         publisher: book.publisher,
         publishedYear: book.publishedYear,
@@ -216,7 +209,7 @@ final class BookDetailsViewModel: BookDetailsView.Model {
         description: book.description ?? book.descriptionPlain,
         flags: flags,
         chapters: chapters,
-        tracks: book.tracks?.map(Track.init(from:)),
+        tracks: narrationBook?.tracks ?? book.tracks?.map(Track.init(from:)),
         ebooks: ebooks
       )
 
@@ -224,9 +217,11 @@ final class BookDetailsViewModel: BookDetailsView.Model {
       error = nil
       isLoading = false
 
-      if localBook != nil {
-        let updated = LocalBook(from: book)
-        try? updated.save()
+      Task { await loadNarration(for: book) }
+
+      if localBook?.isDeleted == false {
+        try? LocalBook(from: book).save()
+        downloadManager.backfillMissingCovers()
       }
 
       await loadSessions()
@@ -236,6 +231,32 @@ final class BookDetailsViewModel: BookDetailsView.Model {
         self.error = "Failed to load book details. Please check your connection and try again."
       }
     }
+  }
+
+  private func loadNarration(for book: Book) async {
+    guard let audioSize = await NarrationProbe.shared.audioSize(of: book) else { return }
+    metadata.narrationSize = audioSize.formatted(.byteCount(style: .file))
+    NarrationImporter.shared.importIfNeeded(bookID: bookID)
+  }
+
+  private func setupNarrationObservation() {
+    NarrationImporter.shared.$tasks
+      .map { [bookID] in $0[bookID] != nil }
+      .removeDuplicates()
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] isImporting in
+        guard let self else { return }
+        let didFinish = self.isPreparingNarration && !isImporting
+        self.isPreparingNarration = isImporting
+
+        if didFinish {
+          Task {
+            await self.loadLocalBook()
+            await self.loadBookFromAPI()
+          }
+        }
+      }
+      .store(in: &cancellables)
   }
 
   private func loadSessions() async {
@@ -313,6 +334,7 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     metadata.language = language
     metadata.durationText = durationText
     metadata.size = size.map { $0.formatted(.byteCount(style: .file)) }
+    metadata.bitrate = hasAudio ? bitrateText(for: tracks) : nil
     metadata.hasAudio = hasAudio
     metadata.isEbook = isEbook
 
@@ -353,6 +375,15 @@ final class BookDetailsViewModel: BookDetailsView.Model {
     updateActions()
   }
 
+  private func bitrateText(for tracks: [Track]?) -> String? {
+    let bitrates = tracks?.compactMap(\.bitRate).map { $0 / 1000 } ?? []
+    guard let minBitrate = bitrates.min(), let maxBitrate = bitrates.max() else { return nil }
+    if minBitrate == maxBitrate {
+      return "\(minBitrate) kbps"
+    }
+    return "\(minBitrate)–\(maxBitrate) kbps"
+  }
+
   private func convertChapters(
     _ chapters: [Models.Chapter],
     currentTime: TimeInterval
@@ -385,7 +416,13 @@ final class BookDetailsViewModel: BookDetailsView.Model {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] states in
         guard let self else { return }
-        self.downloadState = states[bookID] ?? .notDownloaded
+        if case .downloading(let progress) = states[bookID] {
+          self.downloadState = .downloading(progress: progress)
+        } else {
+          self.downloadState =
+            (localBook ?? (try? LocalBook.fetch(bookID: bookID)))?
+              .isDownloaded == true ? .downloaded : .notDownloaded
+        }
         self.updateActions()
       }
       .store(in: &cancellables)
@@ -419,6 +456,20 @@ final class BookDetailsViewModel: BookDetailsView.Model {
         self.updateActions()
       }
       .store(in: &cancellables)
+  }
+
+  private func setupWatchObservation() {
+    watchConnectivityManager.$watchDownloadedBookIDs
+      .combineLatest(watchConnectivityManager.$canDownloadToWatch)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.updateActions()
+      }
+      .store(in: &cancellables)
+  }
+
+  override func onDownloadToWatchTapped() {
+    watchConnectivityManager.requestWatchDownload(bookID: bookID)
   }
 
   private func setupQueueObservation() {
@@ -460,6 +511,15 @@ final class BookDetailsViewModel: BookDetailsView.Model {
 
     if metadata.isEbook, !ereaderDevices.isEmpty {
       updatedActions.insert(.sendToEbook)
+    }
+
+    if metadata.hasAudio,
+      localBook?.hasImportedNarration != true,
+      authenticationService.server?.permissions?.download == true,
+      watchConnectivityManager.canDownloadToWatch,
+      !watchConnectivityManager.watchDownloadedBookIDs.contains(bookID)
+    {
+      updatedActions.insert(.downloadToWatch)
     }
 
     var shareItems: [BookShareItem] = []
@@ -535,9 +595,9 @@ final class BookDetailsViewModel: BookDetailsView.Model {
 
   override func onReadTapped() {
     if let ebookURL = localBook?.ebookLocalPath {
-      ebookReader = EbookReaderViewModel(source: .local(ebookURL), bookID: bookID)
-    } else if let book, let ebookURL = book.ebookURL {
-      ebookReader = EbookReaderViewModel(source: .remote(ebookURL, headers: [:]), bookID: bookID)
+      ebookReader = EbookReaderViewModel(source: .local(url: ebookURL, bookID: bookID))
+    } else if let book, book.ebookURL != nil {
+      ebookReader = EbookReaderViewModel(source: .book(book))
     } else {
       Toast(error: "Ebook URL not available").show()
     }

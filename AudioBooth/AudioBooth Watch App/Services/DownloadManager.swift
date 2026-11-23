@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Models
 import OSLog
 
 final class DownloadManager: NSObject, ObservableObject {
@@ -8,6 +9,7 @@ final class DownloadManager: NSObject, ObservableObject {
   enum DownloadState: Equatable {
     case notDownloaded
     case downloading(progress: Double)
+    case paused(progress: Double)
     case downloaded
   }
 
@@ -24,33 +26,58 @@ final class DownloadManager: NSObject, ObservableObject {
   private var activeOperations: [String: DownloadOperation] = [:]
   private var progressTasks: [String: Task<Void, Never>] = [:]
   @Published private(set) var currentProgress: [String: Double] = [:]
+  @Published private(set) var activeBookIDs: Set<String> = []
+  private var cancellables = Set<AnyCancellable>()
+
+  private override init() {
+    super.init()
+    Publishers.CombineLatest3(
+      connectivityManager.$watchTransferJobs,
+      connectivityManager.$watchTransferByteProgress,
+      connectivityManager.$durablyRequestedBookIDs
+    )
+    .receive(on: DispatchQueue.main)
+    .sink { [weak self] jobs, byteProgress, requested in
+      guard let self else { return }
+      let active = jobs.filter { $0.state == .queued || $0.state == .transferring }
+      currentProgress = Dictionary(
+        active.map { ($0.bookID, byteProgress[$0.transferID]?.fraction ?? $0.progress) },
+        uniquingKeysWith: { _, latest in latest }
+      )
+      activeBookIDs = Set(active.map { $0.bookID }).union(requested)
+    }
+    .store(in: &cancellables)
+  }
+
+  func start() {
+    cleanupOrphanedDownloads()
+  }
+
+  func applicationDidBecomeActive() {
+    WatchShareDownloadCoordinator.shared.resumePersistedTransfers()
+    WatchFileTransferReceiver.resumeRelayTransfers()
+  }
+
+  func downloadState(for bookID: String) -> DownloadState {
+    if localStorage.books.contains(where: { $0.id == bookID && $0.isDownloaded }) {
+      return .downloaded
+    }
+    if isDownloading(for: bookID) {
+      return .downloading(progress: currentProgress[bookID] ?? 0)
+    }
+    return .notDownloaded
+  }
 
   func isDownloading(for bookID: String) -> Bool {
-    activeOperations[bookID] != nil
+    connectivityManager.durablyRequestedBookIDs.contains(bookID)
+      || connectivityManager.watchTransferJobs.contains {
+        $0.bookID == bookID && ($0.state == .queued || $0.state == .transferring)
+      }
   }
 
   func startDownload(for book: WatchBook) {
-    guard activeOperations[book.id] == nil else { return }
-
-    Task {
-      guard
-        let localBook = await connectivityManager.startSession(bookID: book.id, forDownload: true)
-      else {
-        AppLogger.download.error("Failed to get download info")
-        return
-      }
-
-      var bookToSave = localBook
-      bookToSave.currentTime = book.currentTime
-      if bookToSave.coverURL == nil {
-        bookToSave.coverURL = book.coverURL
-      }
-      localStorage.saveBook(bookToSave)
-
-      await MainActor.run {
-        startDownloadOperation(for: bookToSave)
-      }
-    }
+    guard !isDownloading(for: book.id) else { return }
+    connectivityManager.requestWatchTransfer(bookID: book.id)
   }
 
   private func startDownloadOperation(
@@ -87,6 +114,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
   func cancelDownload(for bookID: String) {
     activeOperations[bookID]?.cancel()
+    connectivityManager.cancelWatchTransfer(bookID: bookID)
     currentProgress.removeValue(forKey: bookID)
   }
 
@@ -119,6 +147,7 @@ final class DownloadManager: NSObject, ObservableObject {
 
 extension DownloadManager {
   func deleteDownload(for bookID: String) {
+    cancelDownload(for: bookID)
     guard
       let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
         .first
@@ -329,11 +358,7 @@ private final class DownloadOperation: Operation, @unchecked Sendable {
       }
 
       try await withCheckedThrowingContinuation { continuation in
-        var request = URLRequest(url: downloadURL)
-        for (key, value) in WatchConnectivityManager.shared.customHeaders {
-          request.setValue(value, forHTTPHeaderField: key)
-        }
-        let downloadTask = downloadSession.downloadTask(with: request)
+        let downloadTask = downloadSession.downloadTask(with: URLRequest(url: downloadURL))
         downloadTask.taskDescription = "\(track.index)|\(fileExtension)"
         downloadTask.countOfBytesClientExpectsToReceive =
           track.size.map { Int64($0) } ?? NSURLSessionTransferSizeUnknown

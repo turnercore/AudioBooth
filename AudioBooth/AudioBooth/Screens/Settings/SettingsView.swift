@@ -51,7 +51,7 @@ struct SettingsView: View {
             PreferenceRow(
               systemImage: "cylinder",
               tint: .blue,
-              title: String(localized: "Storage"),
+              title: Text("Storage"),
               subtitle: storageSubtitle
             )
           }
@@ -120,13 +120,13 @@ struct SettingsView: View {
             .textSelection(.enabled)
             .listRowBackground(Color.clear)
         }
-        .contentShape(Rectangle())
+        .contentShape(.rect)
         .onTapGesture(count: 5) {
           preferences.showDebugSection.toggle()
         }
       }
       .scrollContentBackground(.hidden)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
       .navigationTitle("Settings")
       .onAppear { model.storagePreferences?.onAppear() }
       .navigationDestination(for: String.self) { destination in
@@ -162,13 +162,13 @@ struct SettingsView: View {
     }
   }
 
-  private var storageSubtitle: String {
+  private var storageSubtitle: Text {
     guard let storage = model.storagePreferences, storage.totalBytes > 0 else {
-      return String(localized: "Manage downloads & cache")
+      return Text("Manage downloads & cache")
     }
     let bookCount = storage.audiobooksCount + storage.ebooksCount
-    let bookText = bookCount == 1 ? String(localized: "1 book") : String(localized: "\(bookCount) books")
-    return "\(storage.totalSize) · \(bookText)"
+    let bookText = AttributedString(localized: "^[\(bookCount) book](inflect: true)")
+    return Text(verbatim: "\(storage.totalSize) · \(String(bookText.characters))")
   }
 
   @ViewBuilder

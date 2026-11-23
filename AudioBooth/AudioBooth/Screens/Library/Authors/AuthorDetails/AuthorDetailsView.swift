@@ -16,7 +16,7 @@ struct AuthorDetailsView: View {
       if model.isLoading {
         ProgressView("Loading author details...")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(theme.colors.background.page)
+          .background(theme.colors.background.page.ignoresSafeArea())
       } else if let error = model.error {
         ContentUnavailableView {
           Label("Unable to Load Author", systemImage: "exclamationmark.triangle")
@@ -28,7 +28,7 @@ struct AuthorDetailsView: View {
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.colors.background.page)
+        .background(theme.colors.background.page.ignoresSafeArea())
       } else {
         ScrollView {
           VStack(spacing: 24) {
@@ -52,7 +52,7 @@ struct AuthorDetailsView: View {
         }
       }
     }
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle(model.name)
     .navigationBarTitleDisplayMode(.inline)
     .onAppear(perform: model.onAppear)
@@ -71,7 +71,7 @@ struct AuthorDetailsView: View {
           }
         }
         .frame(width: 200, height: 200)
-        .clipShape(Circle())
+        .clipShape(.circle)
       } else {
         Circle()
           .fill(Color.secondary.opacity(0.2))
@@ -144,7 +144,7 @@ struct AuthorDetailsView: View {
             .foregroundColor(.secondary)
         }
         .padding(.horizontal)
-        .contentShape(Rectangle())
+        .contentShape(.rect)
       }
       .buttonStyle(.plain)
       .disabled(model.libraryID == nil)
@@ -180,7 +180,7 @@ struct AuthorDetailsView: View {
             .foregroundColor(.secondary)
         }
         .padding(.horizontal)
-        .contentShape(Rectangle())
+        .contentShape(.rect)
       }
       .buttonStyle(.plain)
       .disabled(model.libraryID == nil)

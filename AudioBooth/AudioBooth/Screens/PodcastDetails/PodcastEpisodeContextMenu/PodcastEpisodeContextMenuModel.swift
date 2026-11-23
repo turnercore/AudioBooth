@@ -3,6 +3,7 @@ import Foundation
 import Logging
 import Models
 
+@MainActor
 final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
   private let episodeID: String
   private let podcastID: String
@@ -53,7 +54,32 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
       actions.insert(isInQueue ? .removeFromQueue : .addToQueue)
     }
 
+    if Self.canDownloadToWatch(episodeID: episodeID) { actions.insert(.downloadToWatch) }
+
     super.init(downloadState: downloadState, actions: actions)
+  }
+
+  convenience init(
+    podcastID: String,
+    podcastTitle: String,
+    podcastAuthor: String?,
+    coverURL: URL?,
+    episode: PodcastEpisodeProjection,
+    progress: Double
+  ) {
+    self.init(
+      episodeID: episode.id,
+      podcastID: podcastID,
+      podcastTitle: podcastTitle,
+      podcastAuthor: podcastAuthor,
+      coverURL: coverURL,
+      episodeTitle: episode.title,
+      episodeDuration: episode.duration,
+      episodeSize: episode.size,
+      isCompleted: progress >= 1.0,
+      progress: progress,
+      apiEpisode: episode.apiEpisode
+    )
   }
 
   override func onAppear() {
@@ -72,10 +98,21 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
       updatedActions.insert(isInQueue ? .removeFromQueue : .addToQueue)
     }
 
+    if Self.canDownloadToWatch(episodeID: episodeID) { updatedActions.insert(.downloadToWatch) }
+
     actions = updatedActions
   }
 
+  // shortcut: the personal watch relay only transfers downloaded books, not episodes; enable once it supports episodes.
+  private static func canDownloadToWatch(episodeID: String) -> Bool {
+    false
+  }
+
   override func onPlayTapped() {
+    if let mediaProgress = try? MediaProgress.fetch(bookID: episodeID), mediaProgress.isFinished {
+      mediaProgress.currentTime = 0
+    }
+
     if let localEpisode = try? LocalEpisode.fetch(episodeID: episodeID) {
       playerManager.setCurrent(localEpisode)
     } else if let apiEpisode {
@@ -122,17 +159,11 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
         Toast(error: "Storage limit reached").show()
         return
       }
-      downloadManager.startDownload(
-        for: episodeID,
-        type: .episode(podcastID: podcastID, episodeID: episodeID),
-        info: .init(
-          title: episodeTitle,
-          coverURL: coverURL,
-          duration: episodeDuration,
-          size: size > 0 ? size : nil,
-          startedAt: Date()
-        )
-      )
+      if let apiEpisode {
+        downloadManager.startDownload(apiEpisode, podcastID: podcastID, coverURL: coverURL)
+      } else if let localEpisode = try? LocalEpisode.fetch(episodeID: episodeID) {
+        downloadManager.startDownload(localEpisode)
+      }
     }
   }
 
@@ -144,12 +175,17 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
     downloadManager.deleteEpisodeDownload(episodeID: episodeID, podcastID: podcastID)
   }
 
+  override func onDownloadToWatchTapped() {
+    WatchConnectivityManager.shared.requestWatchDownload(bookID: episodeID, podcastID: podcastID)
+    actions.remove(.downloadToWatch)
+  }
+
   override func onMarkAsFinishedTapped() {
     let episodeProgressID = "\(podcastID)/\(episodeID)"
     Task {
       do {
         try MediaProgress.markAsFinished(for: episodeID)
-        try await Audiobookshelf.shared.libraries.markAsFinished(bookID: episodeProgressID)
+        try await Audiobookshelf.shared.progress.markAsFinished(bookID: episodeProgressID)
         actions.remove(.markAsFinished)
         actions.insert(.resetProgress)
         onProgressChanged?()
@@ -160,7 +196,11 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
   }
 
   override func onAddToPlaylistTapped() {
-    showingPlaylistSheet = true
+    collectionSelector = CollectionSelectorSheetModel(
+      bookID: podcastID,
+      episodeID: episodeID,
+      mode: .playlists
+    )
   }
 
   override func onResetProgressTapped() {
@@ -172,12 +212,12 @@ final class PodcastEpisodeContextMenuModel: PodcastEpisodeContextMenu.Model {
         if let progress, let id = progress.id {
           progressID = id
         } else {
-          let apiProgress = try await Audiobookshelf.shared.libraries.fetchMediaProgress(
+          let apiProgress = try await Audiobookshelf.shared.progress.fetch(
             bookID: episodeProgressID
           )
           progressID = apiProgress.id
         }
-        try await Audiobookshelf.shared.libraries.resetBookProgress(progressID: progressID)
+        try await Audiobookshelf.shared.progress.reset(progressID: progressID)
         if let progress {
           try progress.delete()
         }

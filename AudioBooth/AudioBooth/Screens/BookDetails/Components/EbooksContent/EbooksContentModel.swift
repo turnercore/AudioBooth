@@ -18,7 +18,7 @@ final class EbooksContentModel: EbooksContent.Model {
       return
     }
 
-    ebookReader = EbookReaderViewModel(source: .remote(url, headers: ebook.authorizationHeaders), bookID: nil)
+    ebookReader = EbookReaderViewModel(source: .temporary(url, headers: ebook.authorizationHeaders))
   }
 }
 

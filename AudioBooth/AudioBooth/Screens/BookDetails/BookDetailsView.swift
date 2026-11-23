@@ -8,7 +8,6 @@ import SwiftUI
 
 struct BookDetailsView: View {
   @Environment(\.appTheme) var theme
-  @Environment(\.verticalSizeClass) private var verticalSizeClass
 
   @StateObject var model: Model
 
@@ -16,20 +15,24 @@ struct BookDetailsView: View {
   @State private var selectedTabIndex: Int = 0
   @State private var isDescriptionExpanded: Bool = false
   @State private var isShowingFullScreenCover = false
+  @Namespace private var coverNamespace
 
   private enum CoordinateSpaces {
     case scrollView
   }
 
   var body: some View {
-    Group {
-      if verticalSizeClass == .compact {
-        landscapeLayout
+    GeometryReader { proxy in
+      if proxy.size.width > proxy.size.height, proxy.size.width >= 700 {
+        landscapeLayout(
+          coverWidth: proxy.leadingPanelWidth ?? proxy.size.width / 2,
+          showsActionButtonsUnderCover: proxy.size.height + proxy.safeAreaInsets.bottom >= 500
+        )
       } else {
         portraitLayout
       }
     }
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .fullScreenCover(item: $model.ebookReader) { model in
       NavigationStack {
         EbookReaderView(model: model)
@@ -38,13 +41,14 @@ struct BookDetailsView: View {
     .fullScreenCover(isPresented: $isShowingFullScreenCover) {
       if let coverURL = model.coverURL {
         FullScreenCoverView(coverURL: coverURL)
+          .zoomTransition(sourceID: "cover", in: coverNamespace)
       }
     }
     .overlay {
       if model.isLoading {
         ProgressView("Loading book details...")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(theme.colors.background.page)
+          .background(theme.colors.background.page.ignoresSafeArea())
       } else if let error = model.error {
         ContentUnavailableView {
           Label("Unable to Load Book", systemImage: "exclamationmark.triangle")
@@ -56,7 +60,7 @@ struct BookDetailsView: View {
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.colors.background.page)
+        .background(theme.colors.background.page.ignoresSafeArea())
       }
     }
     .toolbar {
@@ -110,6 +114,12 @@ struct BookDetailsView: View {
               case .notDownloaded:
                 Label("Download", systemImage: "arrow.down.circle")
               }
+            }
+          }
+
+          if model.actions.contains(.downloadToWatch) {
+            Button(action: model.onDownloadToWatchTapped) {
+              Label("Download to Apple Watch", systemImage: "applewatch")
             }
           }
 
@@ -177,9 +187,9 @@ struct BookDetailsView: View {
           cover(offset: proxy.safeAreaInsets.top)
             .frame(height: 266 + proxy.safeAreaInsets.top)
 
-          contentSections
+          contentSections(showsActionButtons: true)
             .padding()
-            .background(theme.colors.background.page)
+            .background(theme.colors.background.page.ignoresSafeArea())
         }
         .padding(.vertical)
       }
@@ -188,24 +198,25 @@ struct BookDetailsView: View {
     }
   }
 
-  private var landscapeLayout: some View {
+  private func landscapeLayout(coverWidth: CGFloat, showsActionButtonsUnderCover: Bool) -> some View {
     HStack(spacing: 0) {
-      simpleCover
-        .frame(width: 300)
+      simpleCover(width: coverWidth, showsActionButtons: showsActionButtonsUnderCover)
 
       ScrollView {
-        contentSections
+        contentSections(showsActionButtons: !showsActionButtonsUnderCover)
           .padding()
       }
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
     }
   }
 
-  private var contentSections: some View {
+  private func contentSections(showsActionButtons: Bool) -> some View {
     VStack(spacing: 16) {
       title
 
-      actionButtons
+      if showsActionButtons {
+        actionButtons
+      }
 
       headerSection
       MetadataSection(model: model.metadata)
@@ -311,7 +322,26 @@ struct BookDetailsView: View {
 
   private func cover(offset: CGFloat) -> some View {
     ParallaxHeader(coordinateSpace: CoordinateSpaces.scrollView) {
-      ZStack(alignment: .center) {
+      Cover(
+        model: Cover.Model(
+          url: model.coverURL,
+          title: model.title,
+          author: model.authors.map(\.name).joined(separator: ", "),
+          progress: model.progress.audio > 0 ? model.progress.audio : model.progress.ebook,
+          downloadProgress: coverDownloadProgress
+        ),
+        style: .plain
+      )
+      .zoomTransitionSource(id: "cover", in: coverNamespace)
+      .shadow(radius: 4)
+      .frame(width: 250, height: 250)
+      .offset(y: offset / 2 - 8)
+      .onTapGesture {
+        guard model.coverURL != nil else { return }
+        isShowingFullScreenCover = true
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background {
         LazyImage(url: model.coverURL) { state in
           state.image?
             .resizable()
@@ -319,29 +349,11 @@ struct BookDetailsView: View {
             .blur(radius: 5)
             .opacity(0.3)
         }
-
-        Cover(
-          model: Cover.Model(
-            url: model.coverURL,
-            title: model.title,
-            author: model.authors.map(\.name).joined(separator: ", "),
-            progress: model.progress.audio > 0 ? model.progress.audio : model.progress.ebook,
-            downloadProgress: coverDownloadProgress
-          ),
-          style: .plain
-        )
-        .shadow(radius: 4)
-        .frame(width: 250, height: 250)
-        .offset(y: offset / 2 - 8)
-        .onTapGesture {
-          guard model.coverURL != nil else { return }
-          isShowingFullScreenCover = true
-        }
       }
     }
   }
 
-  private var simpleCover: some View {
+  private func simpleCover(width: CGFloat, showsActionButtons: Bool) -> some View {
     VStack {
       Cover(
         model: Cover.Model(
@@ -353,14 +365,24 @@ struct BookDetailsView: View {
         ),
         style: .plain
       )
-      .frame(width: 200, height: 200)
+      .zoomTransitionSource(id: "cover", in: coverNamespace)
+      .aspectRatio(1, contentMode: .fit)
+      .frame(maxWidth: width * 2 / 3, maxHeight: width * 2 / 3)
       .shadow(radius: 4)
       .padding()
       .onTapGesture {
         guard model.coverURL != nil else { return }
         isShowingFullScreenCover = true
       }
+
+      if showsActionButtons {
+        actionButtons
+          .buttonStyle(.borderless)
+          .frame(maxWidth: width * 2 / 3)
+          .padding([.horizontal, .bottom])
+      }
     }
+    .frame(width: width)
     .frame(maxHeight: .infinity)
     .background {
       LazyImage(url: model.coverURL) { state in
@@ -449,19 +471,22 @@ struct BookDetailsView: View {
   private var actionButtons: some View {
     VStack(spacing: 12) {
       if model.metadata.hasAudio {
-        Button(action: model.onPlayTapped) {
-          Label(
-            playButtonText,
-            systemImage: model.isPlaying ? "pause.fill" : "play.fill"
-          )
-          .frame(maxWidth: .infinity)
-          .padding()
-          .background {
-            actionBackground(progress: model.progress.audio)
-          }
-          .foregroundColor(.white)
-          .cornerRadius(12)
+        playButton
+      }
+
+      if isNarrationButtonVisible {
+        Button(action: model.onDownloadTapped) {
+          narrationButtonLabel
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background {
+              actionBackground(progress: coverDownloadProgress)
+                .animation(.linear(duration: 0.5), value: coverDownloadProgress)
+            }
+            .foregroundColor(.white)
+            .cornerRadius(12)
         }
+        .disabled(model.isPreparingNarration)
       }
 
       if model.metadata.isEbook {
@@ -476,6 +501,43 @@ struct BookDetailsView: View {
             .cornerRadius(12)
         }
       }
+    }
+  }
+
+  private var playButton: some View {
+    Button(action: model.onPlayTapped) {
+      Label(
+        playButtonText,
+        systemImage: model.isPlaying ? "pause.fill" : "play.fill"
+      )
+      .frame(maxWidth: .infinity)
+      .padding()
+      .background {
+        actionBackground(progress: model.progress.audio)
+      }
+      .foregroundColor(.white)
+      .cornerRadius(12)
+    }
+  }
+
+  private var isNarrationButtonVisible: Bool {
+    model.metadata.narrationSize != nil && !model.metadata.hasAudio
+      && (model.downloadState != .downloaded || model.isPreparingNarration)
+  }
+
+  @ViewBuilder
+  private var narrationButtonLabel: some View {
+    if model.isPreparingNarration {
+      Label {
+        Text("Preparing Narration…")
+      } icon: {
+        ProgressView()
+          .tint(.white)
+      }
+    } else if case .downloading = model.downloadState {
+      Label("Downloading…", systemImage: "arrow.down.circle")
+    } else {
+      Label("Download to Listen", systemImage: "arrow.down.circle")
     }
   }
 
@@ -561,7 +623,7 @@ struct BookDetailsView: View {
           )
         )
         .frame(maxHeight: isDescriptionExpanded ? nil : 180, alignment: .top)
-        .contentShape(Rectangle())
+        .contentShape(.rect)
         .clipped()
         .allowsHitTesting(false)
 
@@ -576,7 +638,7 @@ struct BookDetailsView: View {
         }
       }
     }
-    .contentShape(Rectangle())
+    .contentShape(.rect)
     .onTapGesture {
       withAnimation(.easeInOut(duration: 0.25)) {
         isDescriptionExpanded.toggle()
@@ -653,6 +715,7 @@ extension BookDetailsView {
       static let resetProgress = Actions(rawValue: 1 << 5)
       static let writeNFCTag = Actions(rawValue: 1 << 6)
       static let sendToEbook = Actions(rawValue: 1 << 8)
+      static let downloadToWatch = Actions(rawValue: 1 << 9)
     }
 
     let bookID: String
@@ -668,7 +731,7 @@ extension BookDetailsView {
     var isLoading: Bool
     var isPlaying: Bool
     var shareItems: [BookShareItem] = []
-    var shareCoverImage: Image? = nil
+    var shareCoverImage: Image? { nil }
     var flags: Flags
     var error: String?
     var genres: [String]?
@@ -678,6 +741,7 @@ extension BookDetailsView {
     var bookmarks: BookmarkViewerSheet.Model?
     var ereaderDevices: [String]
     var ebookReader: EbookReaderView.Model?
+    var isPreparingNarration = false
 
     var tabs: [ContentTab]
     var metadata: MetadataSection.Model
@@ -693,6 +757,7 @@ extension BookDetailsView {
     func onSendToEbookTapped(_ device: String) {}
     func onAddToQueueTapped() {}
     func onRemoveFromQueueTapped() {}
+    func onDownloadToWatchTapped() {}
 
     init(
       bookID: String,

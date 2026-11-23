@@ -1,11 +1,14 @@
+import Combine
 import SwiftUI
 
 struct SeriesView: View {
   let series: [SeriesCard.Model]
   var hasMorePages: Bool = false
+  var pageLoadFailed: Bool = false
   var onLoadMore: (() -> Void)?
 
   @Environment(\.itemDisplayMode) private var displayMode
+  @ObservedObject private var preferences = UserPreferences.shared
   @ScaledMetric(relativeTo: .title) private var gridMinimum: CGFloat = 100
 
   var body: some View {
@@ -30,16 +33,17 @@ struct SeriesView: View {
   private var seriesItems: some View {
     ForEach(series, id: \.id) { series in
       SeriesCard(model: series)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(
+          maxWidth: .infinity,
+          maxHeight: .infinity,
+          alignment: preferences.cardCoverDynamicRatio ? .bottom : .top
+        )
     }
 
     if hasMorePages {
-      ProgressView()
-        .frame(maxWidth: .infinity)
-        .padding()
-        .onAppear {
-          onLoadMore?()
-        }
+      PaginationFooter(hasError: pageLoadFailed) {
+        onLoadMore?()
+      }
     }
   }
 }

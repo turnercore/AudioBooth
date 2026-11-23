@@ -33,7 +33,8 @@ public final class SeriesService {
     limit: Int,
     page: Int? = nil,
     sortBy: SortBy? = nil,
-    ascending: Bool = true
+    ascending: Bool = true,
+    filter: String? = nil
   ) async throws -> Page<Series> {
     guard let networkService = audiobookshelf.networkService else {
       throw Audiobookshelf.AudiobookshelfError.networkError(
@@ -41,7 +42,7 @@ public final class SeriesService {
       )
     }
 
-    guard let library = audiobookshelf.libraries.current else {
+    guard let library = await audiobookshelf.libraries.current else {
       throw Audiobookshelf.AudiobookshelfError.networkError(
         "No library selected. Please select a library first."
       )
@@ -58,6 +59,9 @@ public final class SeriesService {
     }
     if !ascending {
       queryParams["desc"] = "1"
+    }
+    if let filter {
+      queryParams["filter"] = filter
     }
 
     let request = NetworkRequest<Page<Series>>(

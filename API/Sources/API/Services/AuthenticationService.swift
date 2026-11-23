@@ -3,6 +3,7 @@ import Logging
 import Nuke
 import SimpleKeychain
 
+@MainActor
 public final class AuthenticationService: ObservableObject {
   private let audiobookshelf: Audiobookshelf
   private let keychain = SimpleKeychain(service: "me.jgrenier.AudioBS")
@@ -25,6 +26,8 @@ public final class AuthenticationService: ObservableObject {
 
   public var servers: [String: Server] = [:]
 
+  public var onTokenUpdated: (() -> Void)?
+
   public private(set) var server: Server? {
     didSet {
       if let server {
@@ -32,6 +35,7 @@ public final class AuthenticationService: ObservableObject {
       } else {
         UserDefaults.standard.removeObject(forKey: Keys.activeServerID)
       }
+      refreshRedactedHosts()
       audiobookshelf.setupNetworkService()
     }
   }
@@ -52,6 +56,8 @@ public final class AuthenticationService: ObservableObject {
         self.server = servers[activeServerID]
       }
     }
+
+    refreshRedactedHosts()
   }
 
   public func login(
@@ -138,7 +144,6 @@ public final class AuthenticationService: ObservableObject {
     AppLogger.authentication.debug(
       "Query parameters: \(query.keys.joined(separator: ", "))"
     )
-    AppLogger.authentication.debug("Cookie count: \(cookies.count)")
 
     let request = NetworkRequest<Authorize>(
       path: "/auth/openid/callback",
@@ -180,6 +185,7 @@ public final class AuthenticationService: ObservableObject {
       throw Audiobookshelf.AudiobookshelfError.networkError("Server not found")
     }
     server = newServer
+    ImagePipeline.shared = .audioBooth(customHeaders: newServer.customHeaders)
   }
 
   public func restoreConnection(_ connection: Connection) {
@@ -200,7 +206,7 @@ public final class AuthenticationService: ObservableObject {
     let altService = NetworkService(baseURL: url, server: server) {
       let freshToken = try? await server.freshToken
       guard let credentials = freshToken else { return [:] }
-      var headers = server.customHeaders
+      var headers = await server.customHeaders
       headers["Authorization"] = credentials.bearer
       return headers
     }
@@ -212,12 +218,20 @@ public final class AuthenticationService: ObservableObject {
     guard let server = servers[serverID] else { return }
     server.alternativeURL = url
     connections[serverID] = Connection(server)
+    refreshRedactedHosts()
   }
 
   public func setUsingAlternativeURL(_ serverID: String, isUsing: Bool) {
     guard let server = servers[serverID] else { return }
     server.urlMode = isUsing ? .alternative : .primary
     connections[serverID] = Connection(server)
+  }
+
+  func refreshRedactedHosts() {
+    RedactedHosts.shared.update(
+      primaryHost: server?.baseURL.host,
+      alternativeHost: server?.alternativeURL?.host
+    )
   }
 
   public func updateAlias(_ serverID: String, alias: String?) {
@@ -233,12 +247,7 @@ public final class AuthenticationService: ObservableObject {
 
     server.customHeaders = customHeaders
 
-    ImagePipeline.shared = ImagePipeline {
-      let configuration = DataLoader.defaultConfiguration
-      configuration.requestCachePolicy = .returnCacheDataElseLoad
-      configuration.httpAdditionalHeaders = customHeaders
-      $0.dataLoader = DataLoader(configuration: configuration)
-    }
+    audiobookshelf.setupImagePipeline()
 
     var allConnections = connections
     allConnections[serverID] = Connection(server)
@@ -251,6 +260,7 @@ public final class AuthenticationService: ObservableObject {
     server.token = token
 
     connections[serverID] = Connection(server)
+    onTokenUpdated?()
   }
 
   public func removeServer(_ serverID: String) {
@@ -285,7 +295,9 @@ public final class AuthenticationService: ObservableObject {
         serverURL: serverURL,
         token: token,
         customHeaders: customHeaders,
-        alias: existingServer.alias
+        alias: existingServer.alias,
+        alternativeURL: existingServer.alternativeURL,
+        isUsingAlternativeURL: existingServer.urlMode == .alternative
       )
 
       var allConnections = connections
@@ -337,6 +349,20 @@ public final class AuthenticationService: ObservableObject {
       let response = try await networkService.send(request)
       let authorize = response.value
       server?.update(with: authorize)
+      if let server, let legacyToken = authorize.user.token, !legacyToken.isEmpty,
+        case .bearer(let accessToken, let refreshToken, let expiresAt, let currentLegacyToken) = server.token,
+        currentLegacyToken != legacyToken
+      {
+        updateToken(
+          server.id,
+          token: .bearer(
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            legacyToken: legacyToken
+          )
+        )
+      }
       return authorize
     } catch {
       throw Audiobookshelf.AudiobookshelfError.networkError(
@@ -468,7 +494,7 @@ public final class AuthenticationService: ObservableObject {
     case .refresh:
       let connection = Connection(
         serverURL: serverURL,
-        token: .bearer(accessToken: "", refreshToken: token, expiresAt: 0),
+        token: .bearer(accessToken: "", refreshToken: token, expiresAt: 0, legacyToken: nil),
         customHeaders: customHeaders,
         alias: alias
       )
@@ -489,7 +515,7 @@ public final class AuthenticationService: ObservableObject {
       return server.token
     }
 
-    guard case .bearer(_, let refreshToken, _) = server.token else {
+    guard case .bearer(_, let refreshToken, _, let legacyToken) = server.token else {
       throw Audiobookshelf.AudiobookshelfError.loginFailed("Token not in correct format")
     }
 
@@ -501,7 +527,7 @@ public final class AuthenticationService: ObservableObject {
       let user: User
     }
 
-    let networkService = NetworkService(baseURL: server.activeURL)
+    let networkService = NetworkService(server: server)
 
     var headers = server.customHeaders
     headers["x-refresh-token"] = refreshToken
@@ -510,7 +536,8 @@ public final class AuthenticationService: ObservableObject {
       path: "/auth/refresh",
       method: .post,
       body: nil,
-      headers: headers
+      headers: headers,
+      timeout: 120
     )
 
     let response = try await networkService.send(request)
@@ -523,7 +550,8 @@ public final class AuthenticationService: ObservableObject {
     let newToken = Credentials.bearer(
       accessToken: user.accessToken,
       refreshToken: user.refreshToken,
-      expiresAt: newExpiresAt
+      expiresAt: newExpiresAt,
+      legacyToken: legacyToken
     )
 
     server.token = newToken

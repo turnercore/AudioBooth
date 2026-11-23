@@ -29,6 +29,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
     UISegmentedControl.appearance().apportionsSegmentWidthsByContent = true
+    UIView.appearance(whenContainedInInstancesOf: [UIAlertController.self]).tintColor = .label
 
     AppLogger.bootstrap()
 
@@ -42,6 +43,11 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
       } catch {
         AppLogger.general.error("Failed to switch database: \(error.localizedDescription)")
       }
+      WatchConnectivityManager.shared.updateContext()
+    }
+
+    Audiobookshelf.shared.authentication.onTokenUpdated = {
+      WatchConnectivityManager.shared.updateContext()
     }
 
     if let server = Audiobookshelf.shared.authentication.server {
@@ -56,6 +62,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
     _ = WatchConnectivityManager.shared
     _ = SessionManager.shared
+    _ = SleepTimerActivityCleanup.shared
     _ = UserPreferences.shared
     _ = KeepOfflineManager.shared
 
@@ -64,10 +71,15 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     let player: PlayerManagerProtocol = PlayerManager.shared
     AppDependencyManager.shared.add(dependency: player)
 
+    PlayerManager.shared.restoreLastPlayer()
+
     Task { @MainActor in
-      await PlayerManager.shared.restoreLastPlayer()
+      await DownloadManager.shared.reattachInFlightDownloads()
       await Audiobookshelf.shared.authentication.checkServersHealth()
       await StorageManager.shared.cleanupUnusedDownloads()
+      DownloadManager.shared.resumeOutstandingRequests()
+      DownloadManager.shared.backfillMissingCovers()
+      DownloadManager.shared.backfillDownloadDates()
     }
 
     #if !targetEnvironment(macCatalyst)
@@ -75,6 +87,13 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
     #endif
 
     return true
+  }
+
+  func applicationDidBecomeActive(_ application: UIApplication) {
+    WatchConnectivityManager.shared.syncPhoneDownloadedBooks()
+    Task { @MainActor in
+      await WatchFileTransferCoordinator.shared.cleanupStaleShares()
+    }
   }
 
   func application(

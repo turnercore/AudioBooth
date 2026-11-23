@@ -34,7 +34,7 @@ struct EbookChapterPickerSheet: View {
               }
               .padding(.leading, CGFloat(chapter.level) * 16)
               .padding(.vertical, 4)
-              .contentShape(Rectangle())
+              .contentShape(.rect)
               .overlay(alignment: .leading) {
                 if isCurrent {
                   RoundedRectangle(cornerRadius: 8)
@@ -50,7 +50,7 @@ struct EbookChapterPickerSheet: View {
           }
         }
         .scrollContentBackground(.hidden)
-        .background(theme.colors.background.page)
+        .background(theme.colors.background.page.ignoresSafeArea())
         .onAppear {
           if let current = model.current {
             proxy.scrollTo(current.id, anchor: .center)
@@ -90,12 +90,13 @@ extension EbookChapterPickerSheet {
       let link: ReadiumShared.Link
       var level: Int = 0
       var pageNumber: Int?
+      var resourceIndex: Int?
     }
 
     var chapters: [Chapter]
     var currentIndex: Int
     var isPresented: Bool = false
-    var showSubchapters: Bool = false
+    var showSubchapters: Bool = true
 
     var hasSubchapters: Bool {
       chapters.contains(where: { $0.level > 0 })

@@ -13,6 +13,7 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 ## Local Contracts
 
 - Treat SwiftData persistence changes as data-loss sensitive.
+- `DownloadRequest` persists queued/retryable download intent and failure state; keep it credential-free and schema-migrated.
 - Do not delete or recreate persistent stores without preserving recoverable data first.
 - Save/delete helpers that declare `throws` should surface `context.save()` failures instead of swallowing them.
 - Do not import `API` or add remote DTO mapping here; keep DTO-to-local mapping in app-side adapter code.
@@ -24,6 +25,7 @@ Local model package for SwiftData persistence, offline/download metadata, playba
 - Read `Models/Sources/Models/AudiobookshelfSchema.swift` before schema changes.
 - Check all app/widget/watch callers before changing public model fields.
 - Keep filesystem path helpers minimal and app-group aware.
+- Resolve downloaded book/episode covers from `group.com.turnercore.audioBS`; keep cover and download timestamps optional for existing stores.
 - For observation helpers, avoid unbounded main-actor work and make cancellation explicit.
 
 ## Verification

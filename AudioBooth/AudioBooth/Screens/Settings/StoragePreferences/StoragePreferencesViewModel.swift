@@ -18,6 +18,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
 
   override func onKeepOfflineChanged() {
     KeepOfflineManager.shared.reconcile()
+    KeepOfflineManager.shared.downloadQueuedBooks()
   }
 
   override func onClearCacheTapped() {
@@ -30,7 +31,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
       let currentBookID = PlayerManager.shared.current?.id
       let servers = Audiobookshelf.shared.authentication.servers
 
-      DownloadManager.shared.deleteAllServerData()
+      await DownloadManager.shared.deleteAllServerData()
 
       for server in servers.values {
         guard let context = try? ModelContextProvider.shared.context(for: server.id) else { continue }
@@ -41,8 +42,15 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
           }
         }
 
+        if let requests = try? context.fetch(FetchDescriptor<DownloadRequest>()) {
+          for request in requests {
+            context.delete(request)
+          }
+        }
+
         if let podcasts = try? context.fetch(FetchDescriptor<LocalPodcast>()) {
-          for podcast in podcasts {
+          for podcast in podcasts
+          where !podcast.episodes.contains(where: { $0.episodeID == currentBookID }) {
             context.delete(podcast)
           }
         }
@@ -67,29 +75,31 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   }
 
   override func onRemoveDownload(bookID: String, serverID: String) {
-    guard
-      let appGroupURL = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
+    if serverID == Audiobookshelf.shared.authentication.server?.id {
+      DownloadManager.shared.deleteDownload(for: bookID)
+    } else {
+      guard
+        let appGroupURL = FileManager.default.containerURL(
+          forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
+        )
+      else { return }
+
+      let serverDir = appGroupURL.appendingPathComponent(serverID)
+      try? FileManager.default.removeItem(
+        at: serverDir.appendingPathComponent("audiobooks").appendingPathComponent(bookID)
       )
-    else { return }
+      try? FileManager.default.removeItem(
+        at: serverDir.appendingPathComponent("ebooks").appendingPathComponent(bookID)
+      )
 
-    let serverDir = appGroupURL.appendingPathComponent(serverID)
-    let audiobookDir = serverDir.appendingPathComponent("audiobooks").appendingPathComponent(bookID)
-    let ebookDir = serverDir.appendingPathComponent("ebooks").appendingPathComponent(bookID)
-
-    try? FileManager.default.removeItem(at: audiobookDir)
-    try? FileManager.default.removeItem(at: ebookDir)
-
-    if let context = try? ModelContextProvider.shared.context(for: serverID) {
-      let predicate = #Predicate<LocalBook> { $0.bookID == bookID }
-      let descriptor = FetchDescriptor<LocalBook>(predicate: predicate)
-      if let book = try? context.fetch(descriptor).first {
-        context.delete(book)
-        try? context.save()
+      if let context = try? ModelContextProvider.shared.context(for: serverID) {
+        let predicate = #Predicate<LocalBook> { $0.bookID == bookID }
+        if let book = try? context.fetch(FetchDescriptor<LocalBook>(predicate: predicate)).first {
+          context.delete(book)
+          try? context.save()
+        }
       }
     }
-
-    DownloadManager.shared.downloadStates[bookID] = .notDownloaded
 
     Task {
       await loadStorageInfo()
@@ -112,6 +122,9 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
     audiobooksCount = breakdown.audiobooksCount
     ebooksBytes = breakdown.ebooksBytes
     ebooksCount = breakdown.ebooksCount
+    podcastsBytes = breakdown.podcastsBytes
+    podcastsCount = breakdown.podcastsCount
+    databaseBytes = breakdown.databaseBytes
     imageCacheBytes = cache
     totalBytes = total
 
@@ -121,7 +134,8 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   }
 
   private static func computeContentBreakdown() async -> (
-    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int
+    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int,
+    podcastsBytes: Int64, podcastsCount: Int, databaseBytes: Int64
   ) {
     await Task.detached(priority: .utility) {
       computeContentBreakdownOnDisk()
@@ -129,20 +143,24 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
   }
 
   nonisolated private static func computeContentBreakdownOnDisk() -> (
-    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int
+    audiobooksBytes: Int64, audiobooksCount: Int, ebooksBytes: Int64, ebooksCount: Int,
+    podcastsBytes: Int64, podcastsCount: Int, databaseBytes: Int64
   ) {
     guard
       let appGroupURL = FileManager.default.containerURL(
         forSecurityApplicationGroupIdentifier: "group.com.turnercore.audioBS"
       )
     else {
-      return (0, 0, 0, 0)
+      return (0, 0, 0, 0, 0, 0, 0)
     }
 
     var audiobooksBytes: Int64 = 0
     var audiobooksCount = 0
     var ebooksBytes: Int64 = 0
     var ebooksCount = 0
+    var podcastsBytes: Int64 = 0
+    var podcastsCount = 0
+    var databaseBytes: Int64 = 0
 
     let servers =
       (try? FileManager.default.contentsOfDirectory(
@@ -157,7 +175,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
 
       if let books = try? FileManager.default.contentsOfDirectory(at: audiobooksDir, includingPropertiesForKeys: nil) {
         for book in books {
-          let size = directorySizeOnDisk(at: book)
+          let size = book.directorySize
           if size > 0 {
             audiobooksBytes += size
             audiobooksCount += 1
@@ -167,16 +185,40 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
 
       if let books = try? FileManager.default.contentsOfDirectory(at: ebooksDir, includingPropertiesForKeys: nil) {
         for book in books {
-          let size = directorySizeOnDisk(at: book)
+          let size = book.directorySize
           if size > 0 {
             ebooksBytes += size
             ebooksCount += 1
           }
         }
       }
+
+      let episodesDir = server.appendingPathComponent("episodes")
+      if let podcasts = try? FileManager.default.contentsOfDirectory(at: episodesDir, includingPropertiesForKeys: nil) {
+        for podcast in podcasts {
+          let episodes =
+            (try? FileManager.default.contentsOfDirectory(at: podcast, includingPropertiesForKeys: nil)) ?? []
+          for episode in episodes {
+            let size = episode.directorySize
+            if size > 0 {
+              podcastsBytes += size
+              podcastsCount += 1
+            }
+          }
+        }
+      }
+
+      let files =
+        (try? FileManager.default.contentsOfDirectory(at: server, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+      for file in files where file.lastPathComponent.hasPrefix("AudiobookshelfData.sqlite") {
+        let values = try? file.resourceValues(forKeys: [.fileSizeKey])
+        databaseBytes += Int64(values?.fileSize ?? 0)
+      }
     }
 
-    return (audiobooksBytes, audiobooksCount, ebooksBytes, ebooksCount)
+    return (
+      audiobooksBytes, audiobooksCount, ebooksBytes, ebooksCount, podcastsBytes, podcastsCount, databaseBytes
+    )
   }
 
   private func buildServerDownloads() async -> [StoragePreferencesView.ServerDownloads] {
@@ -236,7 +278,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
         let audiobookDir = serverDir.appendingPathComponent("audiobooks")
         if let dirs = try? FileManager.default.contentsOfDirectory(at: audiobookDir, includingPropertiesForKeys: nil) {
           for dir in dirs {
-            let size = directorySizeOnDisk(at: dir)
+            let size = dir.directorySize
             if size > 0 {
               bookSizes[dir.lastPathComponent, default: 0] += size
             }
@@ -246,7 +288,7 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
         let ebooksDir = serverDir.appendingPathComponent("ebooks")
         if let dirs = try? FileManager.default.contentsOfDirectory(at: ebooksDir, includingPropertiesForKeys: nil) {
           for dir in dirs {
-            let size = directorySizeOnDisk(at: dir)
+            let size = dir.directorySize
             if size > 0 {
               bookSizes[dir.lastPathComponent, default: 0] += size
             }
@@ -270,23 +312,6 @@ final class StoragePreferencesViewModel: StoragePreferencesView.Model {
     let descriptor = FetchDescriptor<LocalBook>(predicate: predicate)
     guard let book = try? context.fetch(descriptor).first else { return (bookID, nil) }
     return (book.title, book.authors.first?.name)
-  }
-
-  nonisolated private static func directorySizeOnDisk(at url: URL) -> Int64 {
-    guard
-      let enumerator = FileManager.default.enumerator(
-        at: url,
-        includingPropertiesForKeys: [.fileSizeKey],
-        options: [.skipsHiddenFiles]
-      )
-    else { return 0 }
-
-    var size: Int64 = 0
-    for case let fileURL as URL in enumerator {
-      let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey])
-      size += Int64(values?.fileSize ?? 0)
-    }
-    return size
   }
 
 }

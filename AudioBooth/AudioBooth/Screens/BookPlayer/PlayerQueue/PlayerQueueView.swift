@@ -57,7 +57,7 @@ struct PlayerQueueView: View {
         }
       }
       .scrollContentBackground(.hidden)
-      .background(theme.colors.background.page)
+      .background(theme.colors.background.page.ignoresSafeArea())
       .navigationTitle("Queue")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -84,7 +84,7 @@ struct PlayerQueueView: View {
         .bold()
         .background(.regularMaterial)
       }
-      .navigationDestination(for: NavigationDestination.self) { $0.resolvedView }
+      .navigationDestinations()
     }
   }
 }
@@ -109,7 +109,7 @@ extension PlayerQueueView {
         info
         trailingButton
       }
-      .contentShape(Rectangle())
+      .contentShape(.rect)
       .overlay {
         if !isEditing {
           NavigationLink(value: queueDestination(for: item)) {}
@@ -180,7 +180,7 @@ extension PlayerQueueView {
           playButton
         }
       }
-      .contentShape(Rectangle())
+      .contentShape(.rect)
       .overlay {
         if !isEditing {
           NavigationLink(value: queueDestination(for: item)) {}

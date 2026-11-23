@@ -5,47 +5,71 @@ import Logging
 import Models
 import ReadiumNavigator
 import ReadiumShared
-import ReadiumStreamer
 import SwiftUI
 import UIKit
 import WebKit
 
 final class EbookReaderViewModel: EbookReaderView.Model {
   enum Source {
-    case local(URL)
-    case remote(URL, headers: [String: String])
+    case local(url: URL, bookID: String)
+    case book(Book)
+    case temporary(URL, headers: [String: String])
   }
 
   private let source: Source
-  private let bookID: String?
-  private var publication: Publication?
-  private var navigator: (any Navigator)?
+  var bookID: String? {
+    switch source {
+    case .local(_, let bookID): return bookID
+    case .book(let book): return book.id
+    case .temporary: return nil
+    }
+  }
+  var hasAudiobook: Bool {
+    switch source {
+    case .local(_, let bookID): return (try? LocalBook.fetch(bookID: bookID))?.mediaType.contains(.audiobook) == true
+    case .book(let book): return book.mediaType.contains(.audiobook)
+    case .temporary: return false
+    }
+  }
+  private(set) var publication: Publication?
+  private(set) var navigator: (any Navigator)?
   private var lastProgressUpdate: Date?
+  private var hasUnsyncedProgress = false
   private let audiobookshelf = Audiobookshelf.shared
   private var temporaryFileURL: URL?
-  private var positions: [Locator] = []
+  private var publicationIndex = PublicationIndex()
+  private var positions: [Locator] { publicationIndex.positions }
 
+  var pendingReadAlongDecorations: [Decoration]?
+  var lastReadAlongDecorationAt: Date?
+  var lastLeadingDecorationKey: String?
+  var lastDecorationAuditAt: Date?
+  var readAlongDecorationTask: Task<Void, Never>?
+
+  var pendingReadAlongNavigation: Locator?
+  var readAlongNavigationTask: Task<Void, Never>?
+  var readerSuspendedAt: Date?
+  var mediaOverlayLoad: Task<Void, Never>?
+  var mediaOverlayTimeline: MediaOverlayTimeline?
+  var mediaOverlayClipIndex: Int?
+  var mediaOverlayFollowTask: Task<Void, Never>?
+  var mediaOverlayRetargetTask: Task<Void, Never>?
+  var hasPositionedReader = false
+
+  private var catchUpCheck: Task<Void, Never>?
   private var cancellables = Set<AnyCancellable>()
   private var autoScrollTask: Task<Void, Never>?
+  private var restoreLocationTask: Task<Void, Never>?
+  private var locationBeforeResize: Locator?
   private var isAutoScrollPaused: Bool = false
-  private weak var currentScrollView: UIScrollView?
+  weak var currentScrollView: UIScrollView?
 
-  private lazy var assetRetriever = AssetRetriever(
-    httpClient: DefaultHTTPClient()
-  )
+  private let publicationLoader = EbookPublicationLoader()
 
-  private lazy var publicationOpener = PublicationOpener(
-    parser: DefaultPublicationParser(
-      httpClient: DefaultHTTPClient(),
-      assetRetriever: assetRetriever,
-      pdfFactory: DefaultPDFDocumentFactory()
-    )
-  )
-
-  init(source: Source, bookID: String?) {
+  init(source: Source) {
     self.source = source
-    self.bookID = bookID
     super.init()
+    cover = EbookCoverViewModel(preferences: preferences)
     observeChanges()
   }
 
@@ -61,19 +85,54 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       .sink { [weak self] _ in
         guard let self else { return }
         self.applyPreferences(self.preferences)
+        self.updateProgressHeaderInset()
         self.updateAutoScroll()
+        self.syncReadAlongPreferences()
       }
       .store(in: &cancellables)
 
+    NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+      .sink { [weak self] _ in
+        self?.catchUpCheck?.cancel()
+        self?.suspendReadAlong()
+      }
+      .store(in: &cancellables)
+
+    NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+      .sink { [weak self] _ in
+        self?.resumeReadAlong()
+      }
+      .store(in: &cancellables)
   }
 
   override func onShowControlsChanged(_ isVisible: Bool) {
     isAutoScrollPaused = isVisible
     updateAutoScroll()
+
+    if isVisible, readAlong == nil {
+      supportsReadAlong = isReadAlongSupported
+      refreshCatchUpOffer()
+    }
   }
 
-  private func updateAutoScroll() {
-    if preferences.autoScrollSpeed > 0 && preferences.scroll && !isAutoScrollPaused {
+  override func onReaderSizeChanged() {
+    guard let navigator, !preferences.scroll else { return }
+    guard let locator = locationBeforeResize ?? navigator.currentLocation else { return }
+    locationBeforeResize = locator
+
+    restoreLocationTask?.cancel()
+    restoreLocationTask = Task {
+      try? await Task.sleep(for: .milliseconds(300))
+      guard !Task.isCancelled else { return }
+      locationBeforeResize = nil
+      await navigator.go(to: locator, options: NavigatorGoOptions(animated: false))
+    }
+  }
+
+  func updateAutoScroll() {
+    if preferences.autoScrollSpeed > 0 && preferences.scroll && !isAutoScrollPaused
+      && readAlong?.status.isActive != true && !isFollowingMediaOverlay
+    {
       startAutoScroll()
     } else {
       stopAutoScroll()
@@ -87,8 +146,148 @@ final class EbookReaderViewModel: EbookReaderView.Model {
   }
 
   override func onDisappear() {
+    if hasUnsyncedProgress {
+      lastProgressUpdate = nil
+      syncProgressToServer(progress)
+    }
+    catchUpCheck?.cancel()
+    mediaOverlayRetargetTask?.cancel()
+    stopFollowingMediaOverlay()
     stopAutoScroll()
+    NarrationProgressSync.openReaderBookID = nil
     cleanupTemporaryFile()
+  }
+
+  override func onReadAlongTapped() {
+    if let mediaOverlayLoad {
+      Task {
+        await mediaOverlayLoad.value
+        toggleMediaOverlayReadAlong()
+      }
+      return
+    }
+
+    catchUpMessage = nil
+    toggleReadAlong()
+    updateAutoScroll()
+  }
+
+  override func onCatchUpTapped() {
+    catchUpToNarration()
+  }
+
+  override func onNowPlayingTapped() {
+    guard let player = PlayerManager.shared.current else { return }
+    playerSheet = EbookPlayerSheetModel(player: player, isPresented: true)
+  }
+
+  override func onCatchUpDismissed(_ scope: PositionSyncOffer.Dismissal) {
+    catchUpMessage = nil
+    catchUpCheck?.cancel()
+    dismissCatchUpOffer(scope)
+  }
+
+  private func refreshCatchUpOffer() {
+    guard #available(iOS 26.0, *) else { return }
+
+    guard catchUpCheck == nil, catchUpMessage == nil, readAlong == nil, mediaOverlayLoad == nil,
+      UserPreferences.shared.positionSyncOffers
+    else {
+      return
+    }
+
+    guard let bookID, supportsReadAlong, matchingSession() != nil,
+      let progress = try? MediaProgress.fetch(bookID: bookID),
+      PositionSyncOffer.needsCheck(
+        .toEbook,
+        bookID: bookID,
+        audioTime: progress.currentTime,
+        ebookProgress: progress.ebookProgress ?? 0
+      ),
+      PositionSyncOffer.dismissal(
+        .toEbook,
+        bookID: bookID,
+        at: audioFraction(of: progress),
+        duration: progress.duration
+      ) == nil,
+      let localBook = try? LocalBook.fetch(bookID: bookID)
+    else {
+      return
+    }
+
+    let context = BookSyncContext(localBook: localBook)
+    guard context.isDownloaded, context.hasEbook else { return }
+
+    let audioTime = progress.currentTime
+    let ebookProgress = progress.ebookProgress ?? 0
+    catchUpCheck = Task { [weak self] in
+      defer { self?.catchUpCheck = nil }
+
+      await self?.verifyCatchUpOffer(context, audioTime: audioTime)
+
+      guard !Task.isCancelled else { return }
+      PositionSyncOffer.recordCheck(
+        .toEbook,
+        bookID: bookID,
+        audioTime: audioTime,
+        ebookProgress: ebookProgress
+      )
+    }
+  }
+
+  @available(iOS 26.0, *)
+  private func verifyCatchUpOffer(
+    _ context: BookSyncContext,
+    audioTime: TimeInterval
+  ) async {
+    let alignment = await PositionSyncCheck.measure(context: context, audioTime: audioTime)
+    guard !Task.isCancelled else { return }
+
+    guard let alignment else {
+      AppLogger.readAlong.info("Catch Up: the narration could not be placed in the ebook")
+      return
+    }
+
+    guard alignment.isAudioAhead else {
+      AppLogger.readAlong.info("Catch Up: the ebook is already where the narrator is")
+      return
+    }
+
+    let pages = alignment.pages(over: positions.count)
+    if pages >= 1 {
+      catchUpMessage = "The audiobook is about ^[\(pages) page](inflect: true) ahead."
+      return
+    }
+
+    let ahead: String = Duration.seconds(alignment.seconds(over: context.duration))
+      .formatted(.units(allowed: [.hours, .minutes], width: .wide))
+    catchUpMessage = "You've listened about \(ahead) further than you've read."
+  }
+
+  func recordCatchUpAccepted() {
+    guard let bookID, let progress = try? MediaProgress.fetch(bookID: bookID) else { return }
+
+    PositionSyncOffer.recordCheck(
+      .toEbook,
+      bookID: bookID,
+      audioTime: progress.currentTime,
+      ebookProgress: progress.ebookProgress ?? 0
+    )
+  }
+
+  private func dismissCatchUpOffer(_ scope: PositionSyncOffer.Dismissal) {
+    guard let bookID, let progress = try? MediaProgress.fetch(bookID: bookID) else { return }
+    PositionSyncOffer.dismiss(
+      .toEbook,
+      bookID: bookID,
+      at: audioFraction(of: progress),
+      scope: scope
+    )
+  }
+
+  private func audioFraction(of progress: MediaProgress) -> Double {
+    guard progress.duration > 0, progress.duration.isFinite else { return 0 }
+    return progress.currentTime / progress.duration
   }
 
   private func loadEbook() async {
@@ -98,31 +297,28 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
       let localURL: URL
       switch source {
-      case .local(let url):
+      case .local(let url, let bookID):
         localURL = url
+        NarrationImporter.shared.importIfNeeded(bookID: bookID)
 
-      case .remote(let remoteURL, let headers):
-        if let bookID {
-          localURL = try await downloadEbook(bookID: bookID)
-        } else {
-          localURL = try await downloadTemporaryFile(from: remoteURL, headers: headers)
-          temporaryFileURL = localURL
-        }
+      case .book(let book):
+        localURL = try await downloadEbook(book)
+
+      case .temporary(let remoteURL, let headers):
+        localURL = try await downloadTemporaryFile(from: remoteURL, headers: headers)
+        temporaryFileURL = localURL
       }
 
-      guard let fileURL = FileURL(url: localURL) else { throw EbookError.unsupportedURL }
-
-      let asset = try await assetRetriever.retrieve(url: fileURL).get()
-
-      let publication = try await publicationOpener.open(
-        asset: asset,
-        allowUserInteraction: false
-      ).get()
+      let publication = try await publicationLoader.open(at: localURL)
+      NarrationProgressSync.openReaderBookID = bookID
 
       self.publication = publication
       self.supportsSettings = publication.conforms(to: .epub)
       self.supportsSearch = publication.isSearchable
-      self.positions = (try? await publication.positions().get()) ?? []
+      self.publicationIndex = PublicationIndex(
+        publication: publication,
+        positions: (try? await publication.positions().get()) ?? []
+      )
 
       let initialLocation: Locator?
       if let bookID {
@@ -134,7 +330,8 @@ final class EbookReaderViewModel: EbookReaderView.Model {
           initialLocation = locator
           AppLogger.viewModel.info("Restored from ebookLocation")
         } else {
-          let progress = MediaProgress.progress(for: bookID)
+          let ebookProgress = mediaProgress?.ebookProgress.flatMap { $0 > 0 ? $0 : nil }
+          let progress = ebookProgress ?? MediaProgress.progress(for: bookID)
           initialLocation = await publication.locate(progression: progress)
           AppLogger.viewModel.info("Restored from ebookProgress: \(progress)")
         }
@@ -149,16 +346,40 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       self.navigator = navigator
       self.readerViewController = navigator as? UIViewController
 
+      if navigator is EPUBNavigatorViewController {
+        backgroundColor = themeBackgroundColor
+        textColor = themeTextColor
+      }
+
+      if publication.conforms(to: .epub), publication.metadata.layout != .fixed,
+        let epubNavigator = navigator as? EPUBNavigatorViewController
+      {
+        chapterProgress = ChapterProgressViewModel(
+          navigator: epubNavigator,
+          publication: publication,
+          publicationIndex: publicationIndex,
+          preferences: preferences
+        )
+      }
+      updateProgressHeaderInset()
+
       updateProgress()
       updateCurrentChapterIndex()
+      setupMediaOverlay(for: publication)
+      supportsReadAlong = isReadAlongSupported
+      refreshCatchUpOffer()
 
       await setupChapters()
+      (chapterProgress as? ChapterProgressViewModel)?.chapters = chapters
+
+      await (cover as? EbookCoverViewModel)?.load(publication)
 
       isLoading = false
       updateAutoScroll()
     } catch {
       AppLogger.viewModel.error("Failed to load ebook: \(error)")
       self.error = "Failed to load ebook. Please try again."
+      cover = nil
       isLoading = false
     }
   }
@@ -172,11 +393,13 @@ final class EbookReaderViewModel: EbookReaderView.Model {
         publication: publication,
         initialLocation: initialLocation,
         config: EPUBNavigatorViewController.Configuration(
-          preferences: preferences.toEPUBPreferences(colorScheme: systemColorScheme),
+          preferences: epubPreferences(for: publication),
+          editingActions: editingActions,
           contentInset: [
-            .compact: (top: 0, bottom: 0),
-            .regular: (top: 0, bottom: 0),
-          ]
+            .compact: (top: 40, bottom: 0),
+            .regular: (top: 40, bottom: 0),
+          ],
+          decorationTemplates: HTMLDecorationTemplate.defaultTemplates(experimentalPositioning: true)
         )
       )
       navigator.delegate = self
@@ -194,6 +417,42 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     }
   }
 
+  private var editingActions: [EditingAction] {
+    guard #available(iOS 26.0, *), let bookID,
+      let localBook = try? LocalBook.fetch(bookID: bookID)
+    else {
+      return EditingAction.defaultActions
+    }
+
+    let context = BookSyncContext(localBook: localBook)
+    guard context.isDownloaded, context.hasEbook else { return EditingAction.defaultActions }
+
+    let playFromHere = EditingAction(
+      title: String(localized: "Play From Here"),
+      action: #selector(EPUBNavigatorViewController.playFromHere(_:))
+    )
+    return EditingAction.defaultActions + [playFromHere]
+  }
+
+  func playFromHere() {
+    guard let selectable = navigator as? SelectableNavigator,
+      let locator = selectable.currentSelection?.locator,
+      let bookID,
+      let localBook = try? LocalBook.fetch(bookID: bookID)
+    else {
+      return
+    }
+
+    selectable.clearSelection()
+
+    let context = BookSyncContext(localBook: localBook, ebookLocation: try? locator.jsonString())
+    let model = PositionSyncViewModel(context: context, playsFromHere: true)
+    model.onFinished = { [weak self] in
+      self?.positionSync = nil
+    }
+    positionSync = model
+  }
+
   private func updateProgress() {
     guard let navigator = navigator else { return }
     if let progression = navigator.currentLocation?.locations.totalProgression {
@@ -204,6 +463,25 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     } else {
       page = nil
     }
+  }
+
+  private func updateProgressHeaderInset() {
+    let isVisible = chapterProgress != nil && preferences.showProgressHeader
+    let bottomPadding = preferences.scroll ? 0 : ChapterProgressView.pagedBottomPadding
+    let top = isVisible ? ChapterProgressView.topPadding + ChapterProgressView.height + bottomPadding : 0
+    guard let readerViewController, readerViewController.additionalSafeAreaInsets.top != top else { return }
+    readerViewController.additionalSafeAreaInsets.top = top
+  }
+
+  private var themeBackgroundColor: SwiftUI.Color {
+    guard let epubNavigator = navigator as? EPUBNavigatorViewController else { return .clear }
+    return SwiftUI.Color(uiColor: epubNavigator.settings.effectiveBackgroundColor.uiColor)
+  }
+
+  private var themeTextColor: SwiftUI.Color? {
+    guard let epubNavigator = navigator as? EPUBNavigatorViewController else { return nil }
+    let settings = epubNavigator.settings
+    return SwiftUI.Color(uiColor: (settings.textColor ?? settings.theme.contentColor).uiColor)
   }
 
   private func setupChapters() async {
@@ -233,27 +511,28 @@ final class EbookReaderViewModel: EbookReaderView.Model {
         title: link.title ?? "Untitled",
         link: link,
         level: level,
-        pageNumber: pageNumber(forChapterID: id)
+        pageNumber: pageNumber(forChapterID: id),
+        resourceIndex: publicationIndex.readingOrderIndex(of: link.url())
       )
       return [chapter] + flattenTOC(link.children, level: level + 1)
     }
   }
 
   private func pageNumber(forChapterID id: String) -> Int? {
-    guard !positions.isEmpty, !id.contains("#") else { return nil }
-    return positions.first(where: { $0.href.string == id })?.locations.position
+    guard !id.contains("#") else { return nil }
+    return publicationIndex.firstPosition(in: id)
   }
 
   private func updateCurrentChapterIndex() {
     guard let chapters, let navigator else { return }
-    guard let current = navigator.currentLocation?.href else { return }
+    guard let current = navigator.currentLocation?.href,
+      let currentResourceIndex = publicationIndex.readingOrderIndex(of: current)
+    else { return }
 
-    let currentPath = current.string
     let index =
       chapters.chapters.lastIndex(where: { chapter in
-        guard chapter.level == 0 else { return false }
-        let chapterPath = chapter.id.split(separator: "#", maxSplits: 1).first.map(String.init) ?? chapter.id
-        return chapterPath == currentPath
+        guard let chapterResourceIndex = chapter.resourceIndex else { return false }
+        return chapterResourceIndex <= currentResourceIndex
       }) ?? 0
     chapters.currentIndex = index
   }
@@ -339,7 +618,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
     do {
       try MediaProgress.markAsFinished(for: bookID)
-      try await audiobookshelf.libraries.markAsFinished(bookID: bookID)
+      try await audiobookshelf.progress.markAsFinished(bookID: bookID)
     } catch {
       AppLogger.viewModel.error("Failed to mark ebook as finished: \(error)")
     }
@@ -355,8 +634,8 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     stopAutoScroll()
     updateCurrentScrollView(in: vc.view)
     autoScrollTask = Task { [weak self] in
-      guard let self else { return }
       while !Task.isCancelled {
+        guard let self else { return }
         let speed = preferences.autoScrollSpeed
         let targetDelta = CGFloat(speed * 20) * 0.016
         let delta = max(targetDelta, 0.25)
@@ -380,7 +659,7 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     autoScrollTask = nil
   }
 
-  private func updateCurrentScrollView(in view: UIView) {
+  func updateCurrentScrollView(in view: UIView) {
     var best: (WKWebView, CGFloat)?
     let mid = view.window?.bounds.midX ?? 0
     findWebViews(in: view) { wv in
@@ -401,8 +680,17 @@ final class EbookReaderViewModel: EbookReaderView.Model {
       return
     }
 
-    let epubPrefs = preferences.toEPUBPreferences(colorScheme: systemColorScheme)
-    epubNavigator.submitPreferences(epubPrefs)
+    epubNavigator.submitPreferences(epubPreferences(for: publication))
+    backgroundColor = themeBackgroundColor
+    textColor = themeTextColor
+  }
+
+  private func epubPreferences(for publication: Publication?) -> EPUBPreferences {
+    var prefs = preferences.toEPUBPreferences(colorScheme: systemColorScheme)
+    if publication?.metadata.layout != .fixed {
+      prefs.spread = .never
+    }
+    return prefs
   }
 
   private var systemColorScheme: ColorScheme {
@@ -442,6 +730,10 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     AppLogger.viewModel.info("Cleared search highlights")
   }
 
+  private var minimumSecondsBetweenProgressSyncs: TimeInterval {
+    readAlong?.status == .following || isFollowingMediaOverlay ? 15 : 1
+  }
+
   private func syncProgressToServer(_ progress: Double) {
     guard let bookID else { return }
 
@@ -457,18 +749,22 @@ final class EbookReaderViewModel: EbookReaderView.Model {
     )
 
     let now = Date()
-    if let lastUpdate = lastProgressUpdate, now.timeIntervalSince(lastUpdate) < 1.0 {
+    if let lastUpdate = lastProgressUpdate,
+      now.timeIntervalSince(lastUpdate) < minimumSecondsBetweenProgressSyncs
+    {
+      hasUnsyncedProgress = true
       return
     }
 
     lastProgressUpdate = now
+    hasUnsyncedProgress = false
 
     Task {
       do {
-        try await audiobookshelf.books.updateEbookProgress(
+        try await audiobookshelf.progress.update(
           bookID: bookID,
-          progress: progress,
-          location: ebookLocation
+          ebookProgress: progress,
+          ebookLocation: ebookLocation
         )
         AppLogger.viewModel.debug("Synced ebook progress: \(progress)")
       } catch {
@@ -480,19 +776,24 @@ final class EbookReaderViewModel: EbookReaderView.Model {
 
 extension EbookReaderViewModel {
   enum EbookError: Error {
-    case unsupportedURL
     case unsupportedFormat
     case downloadFailed
   }
 }
 
 extension EbookReaderViewModel {
-  private func downloadEbook(bookID: String) async throws -> URL {
-    DownloadManager.shared.startDownload(for: bookID, type: .ebook)
+  private func downloadEbook(_ book: Book) async throws -> URL {
+    DownloadManager.shared.startDownload(book, kind: .ebook)
 
-    for await updatedItem in LocalBook.observe(where: \.bookID, equals: bookID) {
-      if let path = updatedItem.ebookLocalPath {
+    for await _ in DownloadManager.shared.$downloadStates.values {
+      if let path = (try? LocalBook.fetch(bookID: book.id))?.ebookLocalPath {
         return path
+      }
+
+      let request = try? DownloadRequest.fetch(itemID: book.id)
+
+      guard let request, !request.hasFailed else {
+        throw EbookError.downloadFailed
       }
     }
 
@@ -505,7 +806,12 @@ extension EbookReaderViewModel {
       request.setValue(value, forHTTPHeaderField: key)
     }
 
-    let (tempURL, _) = try await URLSession.shared.download(for: request)
+    let (tempURL, response) = try await URLSession.shared.download(for: request)
+
+    if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+      try? FileManager.default.removeItem(at: tempURL)
+      throw EbookError.downloadFailed
+    }
 
     let tempDirectory = FileManager.default.temporaryDirectory
     let fileName = url.lastPathComponent
@@ -544,9 +850,26 @@ extension EbookReaderViewModel: EPUBNavigatorDelegate, PDFNavigatorDelegate {
     if let vc = navigator as? UIViewController {
       updateCurrentScrollView(in: vc.view)
     }
+    (chapterProgress as? ChapterProgressViewModel)?.onLocationChanged()
+    mediaOverlayLocationChanged()
   }
 
   func navigator(_ navigator: Navigator, presentError error: NavigatorError) {
     AppLogger.viewModel.error("Navigator error: \(error)")
+  }
+
+  func navigatorContentInset(_ navigator: VisualNavigator) -> UIEdgeInsets? {
+    guard chapterProgress != nil, let viewController = navigator as? UIViewController else { return nil }
+
+    let windowInsets = viewController.view.window?.safeAreaInsets ?? .zero
+    let headerHeight = viewController.additionalSafeAreaInsets.top
+    let top = headerHeight > 0 ? windowInsets.top + headerHeight : max(windowInsets.top, 40)
+    return UIEdgeInsets(top: top, left: 0, bottom: windowInsets.bottom, right: 0)
+  }
+}
+
+extension EPUBNavigatorViewController {
+  @objc func playFromHere(_ sender: Any?) {
+    (delegate as? EbookReaderViewModel)?.playFromHere()
   }
 }

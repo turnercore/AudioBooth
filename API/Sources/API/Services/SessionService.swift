@@ -67,6 +67,8 @@ public final class SessionService {
         let clientName: String
         let clientVersion: String?
         let deviceId: String
+        let manufacturer: String
+        let model: String
       }
 
       init(forceDirectPlay: Bool, forceTranscode: Bool, sessionType: SessionType) {
@@ -89,7 +91,9 @@ public final class SessionService {
         self.deviceInfo = DeviceInfo(
           clientName: sessionType.clientName,
           clientVersion: clientVersion,
-          deviceId: sessionType.deviceID
+          deviceId: sessionType.deviceID,
+          manufacturer: "Apple",
+          model: Device.model
         )
       }
     }
@@ -177,29 +181,6 @@ public final class SessionService {
     }
   }
 
-  public func removeFromContinueListening(_ progressID: String) async throws {
-    guard let networkService = audiobookshelf.networkService else {
-      throw Audiobookshelf.AudiobookshelfError.networkError(
-        "Network service not configured. Please login first."
-      )
-    }
-
-    struct Response: Codable {}
-
-    let request = NetworkRequest<Response>(
-      path: "/api/me/progress/\(progressID)/remove-from-continue-listening",
-      method: .get
-    )
-
-    do {
-      _ = try await networkService.send(request)
-    } catch {
-      throw Audiobookshelf.AudiobookshelfError.networkError(
-        "Failed to remove from continue listening: \(error.localizedDescription)"
-      )
-    }
-  }
-
   public func syncLocalSession(_ session: SessionSync) async throws {
     guard let networkService = audiobookshelf.networkService else {
       throw Audiobookshelf.AudiobookshelfError.networkError(
@@ -216,6 +197,8 @@ public final class SessionService {
 
     do {
       _ = try await networkService.send(request)
+    } catch let error as NetworkError {
+      throw error
     } catch {
       throw Audiobookshelf.AudiobookshelfError.networkError(
         "Failed to sync local session: \(error.localizedDescription)"

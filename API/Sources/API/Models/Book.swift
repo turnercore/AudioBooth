@@ -19,12 +19,14 @@ public struct Book: Codable, Sendable {
     case collapsedSeries
   }
 
+  @MainActor
   public func coverURL(raw: Bool = false) -> URL? {
     guard let serverURL = Audiobookshelf.shared.serverURL else { return nil }
     var url = serverURL.appendingPathComponent("api/items/\(id)/cover")
+    url.append(queryItems: [URLQueryItem(name: "ts", value: String(Int(updatedAt.timeIntervalSince1970 * 1000)))])
 
     #if os(watchOS)
-    url.append(queryItems: [URLQueryItem(name: "format", value: "jpg")])
+    url.append(queryItems: [URLQueryItem(name: "format", value: "jpeg")])
     #else
     if raw {
       url.append(queryItems: [URLQueryItem(name: "raw", value: "1")])
@@ -34,6 +36,7 @@ public struct Book: Codable, Sendable {
     return url
   }
 
+  @MainActor
   public var ebookURL: URL? {
     guard let serverURL = Audiobookshelf.shared.serverURL else { return nil }
     return serverURL.appendingPathComponent("api/items/\(id)/ebook")
@@ -100,6 +103,8 @@ extension Book {
   }
 
   public struct Media: Codable, Sendable {
+    /// The server media record ID used by media-item share APIs. This differs from the library item ID.
+    public let id: String?
     public let metadata: Metadata
     public let duration: Double?
     public let size: Int64?
@@ -161,6 +166,7 @@ extension Book {
     public let numBooks: Int
     public let libraryItemIds: [String]
 
+    @MainActor
     public func coverURLs(limit: Int = 3) -> [URL] {
       guard let serverURL = Audiobookshelf.shared.serverURL else { return [] }
       return libraryItemIds.prefix(limit).map { itemID in

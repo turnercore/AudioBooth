@@ -5,18 +5,20 @@ final class ChapterPickerSheetViewModel: ChapterPickerSheet.Model {
   let player: AudioPlayer
 
   private var itemID: String
+  private let podcastID: String?
 
   private let mediaProgress: MediaProgress
   private let playerManager = PlayerManager.shared
-  private let userPreferences = UserPreferences.shared
 
   init(
     itemID: String,
+    podcastID: String?,
     chapters: [Models.Chapter],
     mediaProgress: MediaProgress,
     player: AudioPlayer
   ) {
     self.itemID = itemID
+    self.podcastID = podcastID
     self.mediaProgress = mediaProgress
     self.player = player
 
@@ -71,7 +73,10 @@ final class ChapterPickerSheetViewModel: ChapterPickerSheet.Model {
   private func updateNavigation() {
     canGoPreviousChapter = currentIndex > 0
     let isLastChapter = currentIndex == chapters.count - 1
-    canGoNextChapter = !isLastChapter || (!playerManager.queue.isEmpty && userPreferences.autoPlayNextInQueue)
+    let hasChapters = chapters.count > 1
+    canGoNextChapter =
+      !isLastChapter || !playerManager.queue.isEmpty
+      || (hasChapters && SmartContinueResolver().isEnabled(currentPodcastID: podcastID))
   }
 
   override func onRepeatTapped() {
@@ -114,13 +119,14 @@ final class ChapterPickerSheetViewModel: ChapterPickerSheet.Model {
       player.seek(to: seekTime)
       record(chapter: currentChapter, position: seekTime)
     }
+    mediaProgress.lastPlayedAt = Date()
   }
 
   override func onNextChapterTapped() {
     guard currentIndex < chapters.count - 1 else {
       mediaProgress.currentTime = mediaProgress.duration
       player.pause()
-      playerManager.playNext()
+      playerManager.playNext(isManual: true)
       return
     }
     currentIndex += 1
@@ -128,6 +134,7 @@ final class ChapterPickerSheetViewModel: ChapterPickerSheet.Model {
     let seekTime = nextChapter.start + 0.1
     player.seek(to: seekTime)
     record(chapter: nextChapter, position: seekTime)
+    mediaProgress.lastPlayedAt = Date()
   }
 
   override func onChapterTapped(at index: Int) {
@@ -136,6 +143,7 @@ final class ChapterPickerSheetViewModel: ChapterPickerSheet.Model {
     let seekTime = chapter.start + 0.1
     player.seek(to: seekTime)
     record(chapter: chapter, position: seekTime)
+    mediaProgress.lastPlayedAt = Date()
   }
 
   private func record(chapter: Chapter, position: TimeInterval) {

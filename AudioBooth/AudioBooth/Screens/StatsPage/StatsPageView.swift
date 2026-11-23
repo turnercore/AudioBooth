@@ -38,7 +38,7 @@ struct StatsPageView: View {
       .padding(.horizontal, 12)
       .padding(.vertical, 16)
     }
-    .background(theme.colors.background.page)
+    .background(theme.colors.background.page.ignoresSafeArea())
     .navigationTitle("Your Stats")
     .navigationBarTitleDisplayMode(.large)
     .onAppear(perform: model.onAppear)
@@ -135,7 +135,7 @@ extension StatsPageView {
         .foregroundStyle(.secondary)
 
       HStack(alignment: .firstTextBaseline, spacing: 4) {
-        Text("\(hours.formatted())")
+        Text(hours.formatted())
           .font(.system(size: 64, weight: .bold, design: .rounded))
           .foregroundStyle(Color.accentColor)
           .monospacedDigit()
@@ -152,7 +152,7 @@ extension StatsPageView {
     .padding(.vertical, 20)
     .frame(maxWidth: .infinity)
     .background(theme.colors.background.card)
-    .clipShape(RoundedRectangle(cornerRadius: 24))
+    .clipShape(.rect(cornerRadius: 24))
   }
 
 }
@@ -169,7 +169,7 @@ extension StatsPageView {
     }
   }
 
-  private func periodCard(label: String, seconds: Double) -> some View {
+  private func periodCard(label: LocalizedStringResource, seconds: Double) -> some View {
     VStack(alignment: .center, spacing: 6) {
       Text(label)
         .font(.caption2)
@@ -188,7 +188,7 @@ extension StatsPageView {
     .padding(.vertical, 16)
     .padding(.horizontal, 8)
     .background(theme.colors.background.card)
-    .clipShape(RoundedRectangle(cornerRadius: 16))
+    .clipShape(.rect(cornerRadius: 16))
   }
 
   private func sumListeningDays(in component: Calendar.Component) -> Double {
@@ -237,16 +237,16 @@ extension StatsPageView {
     }
     .frame(maxWidth: .infinity)
     .background(theme.colors.background.card)
-    .clipShape(RoundedRectangle(cornerRadius: 16))
+    .clipShape(.rect(cornerRadius: 16))
   }
 
   private func streakItem(
     icon: String,
     iconColor: Color,
-    title: String,
+    title: LocalizedStringResource,
     value: Int,
     valueColor: Color,
-    caption: String
+    caption: LocalizedStringResource
   ) -> some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 6) {
@@ -255,7 +255,7 @@ extension StatsPageView {
           .foregroundStyle(iconColor)
           .frame(width: 24, height: 24)
           .background(iconColor.opacity(0.12))
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(.rect(cornerRadius: 8))
 
         Text(title)
           .font(.caption2)
@@ -322,14 +322,14 @@ extension StatsPageView {
     return average > 0 ? average : 60
   }
 
-  private func statCard(icon: String, iconColor: Color, value: String, label: String) -> some View {
+  private func statCard(icon: String, iconColor: Color, value: String, label: LocalizedStringResource) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       Image(systemName: icon)
         .font(.subheadline)
         .foregroundStyle(iconColor)
         .frame(width: 30, height: 30)
         .background(iconColor.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .clipShape(.rect(cornerRadius: 9))
 
       VStack(alignment: .leading, spacing: 2) {
         Text(value)
@@ -346,7 +346,7 @@ extension StatsPageView {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(14)
     .background(theme.colors.background.card)
-    .clipShape(RoundedRectangle(cornerRadius: 16))
+    .clipShape(.rect(cornerRadius: 16))
   }
 
 }
@@ -367,7 +367,7 @@ extension StatsPageView {
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(Color.secondary.opacity(0.12))
-            .clipShape(Capsule())
+            .clipShape(.capsule)
         }
       }
 
@@ -382,7 +382,7 @@ extension StatsPageView {
     .padding(16)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(theme.colors.background.card)
-    .clipShape(RoundedRectangle(cornerRadius: 20))
+    .clipShape(.rect(cornerRadius: 20))
   }
 
 }
@@ -426,7 +426,7 @@ extension StatsPageView {
       }
       .padding(16)
       .background(theme.colors.background.card)
-      .clipShape(RoundedRectangle(cornerRadius: 20))
+      .clipShape(.rect(cornerRadius: 20))
     }
   }
 
@@ -507,7 +507,7 @@ extension StatsPageView {
         }
       }
       .background(theme.colors.background.card)
-      .clipShape(RoundedRectangle(cornerRadius: 20))
+      .clipShape(.rect(cornerRadius: 20))
     }
   }
 

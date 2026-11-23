@@ -6,7 +6,6 @@ import SwiftUI
 
 struct PodcastDetailsView: View {
   @Environment(\.appTheme) var theme
-  @Environment(\.verticalSizeClass) private var verticalSizeClass
 
   private let audiobookshelf = Audiobookshelf.shared
 
@@ -14,21 +13,31 @@ struct PodcastDetailsView: View {
 
   @State private var isDescriptionExpanded = false
   @State private var isShowingFullScreenCover = false
-  @State private var activePlaylistModel: CollectionSelectorSheet.Model?
+  @State private var layoutSize: CGSize?
 
   private enum CoordinateSpaces {
     case scrollView
   }
 
   var body: some View {
-    Group {
-      if verticalSizeClass == .compact {
-        landscapeLayout
+    GeometryReader { proxy in
+      let size = layoutSize ?? proxy.size
+      if size.width > size.height, size.width >= 700 {
+        landscapeLayout(coverWidth: proxy.leadingPanelWidth ?? 300)
       } else {
         portraitLayout
       }
     }
-    .background(theme.colors.background.page)
+    .background {
+      GeometryReader { proxy in
+        Color.clear
+          .onChange(of: proxy.size, initial: true) { _, size in
+            layoutSize = size
+          }
+      }
+      .ignoresSafeArea(.keyboard)
+    }
+    .background(theme.colors.background.page.ignoresSafeArea())
     .fullScreenCover(isPresented: $isShowingFullScreenCover) {
       if let coverURL = model.coverURL {
         FullScreenCoverView(coverURL: coverURL)
@@ -38,7 +47,7 @@ struct PodcastDetailsView: View {
       if model.isLoading {
         ProgressView("Loading podcast details...")
           .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(theme.colors.background.page)
+          .background(theme.colors.background.page.ignoresSafeArea())
       } else if let error = model.error {
         ContentUnavailableView {
           Label("Unable to Load Podcast", systemImage: "exclamationmark.triangle")
@@ -50,17 +59,7 @@ struct PodcastDetailsView: View {
           }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.colors.background.page)
-      }
-    }
-    .sheet(
-      isPresented: Binding(
-        get: { activePlaylistModel != nil },
-        set: { if !$0 { activePlaylistModel = nil } }
-      )
-    ) {
-      if let sheetModel = activePlaylistModel {
-        CollectionSelectorSheet(model: sheetModel)
+        .background(theme.colors.background.page.ignoresSafeArea())
       }
     }
     .toolbar {
@@ -112,6 +111,7 @@ struct PodcastDetailsView: View {
       }
     }
     .onAppear(perform: model.onAppear)
+    .onDisappear(perform: model.onDisappear)
   }
 
   private var autoQueueMenu: some View {
@@ -190,7 +190,7 @@ struct PodcastDetailsView: View {
 
             contentSections
               .padding(.vertical)
-              .background(theme.colors.background.page)
+              .background(theme.colors.background.page.ignoresSafeArea())
           }
           .padding(.vertical)
         }
@@ -203,17 +203,16 @@ struct PodcastDetailsView: View {
     }
   }
 
-  private var landscapeLayout: some View {
+  private func landscapeLayout(coverWidth: CGFloat) -> some View {
     HStack(spacing: 0) {
-      simpleCover
-        .frame(width: 300)
+      simpleCover(width: coverWidth)
 
       ScrollViewReader { scrollProxy in
         ScrollView {
           contentSections
             .padding(.vertical)
         }
-        .background(theme.colors.background.page)
+        .background(theme.colors.background.page.ignoresSafeArea())
         .onChange(of: model.scrollToEpisodeID) { _, id in
           scrollToEpisode(id: id, proxy: scrollProxy)
         }
@@ -316,7 +315,23 @@ struct PodcastDetailsView: View {
 
   private func cover(offset: CGFloat) -> some View {
     ParallaxHeader(coordinateSpace: CoordinateSpaces.scrollView) {
-      ZStack(alignment: .center) {
+      Cover(
+        model: Cover.Model(
+          url: model.coverURL,
+          title: model.title,
+          author: model.author
+        ),
+        style: .plain
+      )
+      .shadow(radius: 4)
+      .frame(width: 250, height: 250)
+      .offset(y: offset / 2 - 8)
+      .onTapGesture {
+        guard model.coverURL != nil else { return }
+        isShowingFullScreenCover = true
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background {
         LazyImage(url: model.coverURL) { state in
           state.image?
             .resizable()
@@ -324,27 +339,11 @@ struct PodcastDetailsView: View {
             .blur(radius: 5)
             .opacity(0.3)
         }
-
-        Cover(
-          model: Cover.Model(
-            url: model.coverURL,
-            title: model.title,
-            author: model.author
-          ),
-          style: .plain
-        )
-        .shadow(radius: 4)
-        .frame(width: 250, height: 250)
-        .offset(y: offset / 2 - 8)
-        .onTapGesture {
-          guard model.coverURL != nil else { return }
-          isShowingFullScreenCover = true
-        }
       }
     }
   }
 
-  private var simpleCover: some View {
+  private func simpleCover(width: CGFloat) -> some View {
     VStack {
       Cover(
         model: Cover.Model(
@@ -354,7 +353,8 @@ struct PodcastDetailsView: View {
         ),
         style: .plain
       )
-      .frame(width: 200, height: 200)
+      .aspectRatio(1, contentMode: .fit)
+      .frame(maxWidth: width * 2 / 3, maxHeight: width * 2 / 3)
       .shadow(radius: 4)
       .padding()
       .onTapGesture {
@@ -362,6 +362,7 @@ struct PodcastDetailsView: View {
         isShowingFullScreenCover = true
       }
     }
+    .frame(width: width)
     .frame(maxHeight: .infinity)
     .background {
       LazyImage(url: model.coverURL) { state in
@@ -428,7 +429,7 @@ struct PodcastDetailsView: View {
           )
         )
         .frame(maxHeight: isDescriptionExpanded ? nil : 180, alignment: .top)
-        .contentShape(Rectangle())
+        .contentShape(.rect)
         .clipped()
         .allowsHitTesting(false)
 
@@ -443,7 +444,7 @@ struct PodcastDetailsView: View {
         }
       }
     }
-    .contentShape(Rectangle())
+    .contentShape(.rect)
     .onTapGesture {
       withAnimation(.easeInOut(duration: 0.25)) {
         isDescriptionExpanded.toggle()
@@ -485,10 +486,10 @@ struct PodcastDetailsView: View {
             .padding(.vertical, 6)
             .foregroundStyle(Color.accentColor)
             .background(Color.accentColor.opacity(0.15))
-            .clipShape(Capsule())
+            .clipShape(.capsule)
         }
         .buttonStyle(.plain)
-        .disabled(model.filteredEpisodes.isEmpty)
+        .disabled(model.filteredEpisodes.allSatisfy(\.isCompleted))
       }
       .padding(.horizontal)
 
@@ -533,6 +534,8 @@ struct PodcastDetailsView: View {
 
       LazyVStack(spacing: 0) {
         ForEach(model.filteredEpisodes) { episode in
+          let selector = episode.contextMenu?.collectionSelector
+
           NavigationLink {
             PodcastEpisodeDetailView(
               model: PodcastEpisodeDetailViewModel(
@@ -553,21 +556,25 @@ struct PodcastDetailsView: View {
               PodcastEpisodeContextMenu(model: contextMenu)
             }
           }
-          .onChange(of: episode.contextMenu?.showingPlaylistSheet) { _, showing in
-            guard showing == true else { return }
-            episode.contextMenu?.showingPlaylistSheet = false
-            activePlaylistModel = CollectionSelectorSheetModel(
-              bookID: model.podcastID,
-              episodeID: episode.id,
-              mode: .playlists
+          .menuOrder(.priority)
+          .podcastEpisodeAccessibilityActions(
+            episodeID: episode.id,
+            menu: episode.contextMenu
+          )
+          .sheet(
+            item: Binding(
+              get: { selector },
+              set: { episode.contextMenu?.collectionSelector = $0 }
             )
+          ) { sheetModel in
+            CollectionSelectorSheet(model: sheetModel)
           }
           .background(
             episode.id == model.highlightedEpisodeID
               ? Color.accentColor.opacity(0.15)
               : Color.clear
           )
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+          .clipShape(.rect(cornerRadius: 8))
           .id(episode.id)
           Divider()
         }
@@ -604,7 +611,32 @@ struct PodcastDetailsView: View {
             .foregroundStyle(.secondary)
         }
 
-        episodePlayButton(episode)
+        if let summary = episode.summary, !summary.isEmpty {
+          Text(summary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+        }
+
+        HStack(spacing: 8) {
+          episodePlayButton(episode)
+
+          switch episode.downloadState {
+          case .notDownloaded:
+            EmptyView()
+          case .downloading(let progress):
+            ProgressView(value: progress)
+              .progressViewStyle(GaugeProgressViewStyle(lineWidth: 3))
+              .frame(width: 18, height: 18)
+              .accessibilityLabel("Downloading…")
+          case .downloaded:
+            Image(systemName: "arrow.down.circle.fill")
+              .font(.title3)
+              .foregroundStyle(.green)
+              .accessibilityLabel("Downloaded")
+          }
+        }
 
         if episode.progress > 0 {
           ProgressView(value: min(episode.progress, 1.0))
@@ -619,7 +651,7 @@ struct PodcastDetailsView: View {
         .foregroundStyle(.secondary)
     }
     .padding(.vertical, 10)
-    .contentShape(Rectangle())
+    .contentShape(.rect)
   }
 
   private func episodePlayButton(_ episode: Model.Episode) -> some View {
@@ -640,9 +672,13 @@ struct PodcastDetailsView: View {
       .padding(.vertical, 6)
       .foregroundStyle(isCurrentlyPlaying ? .white : Color.accentColor)
       .background(isCurrentlyPlaying ? Color.accentColor : Color.accentColor.opacity(0.15))
-      .clipShape(Capsule())
+      .clipShape(.capsule)
     }
     .buttonStyle(.plain)
+    .accessibilityLabel(isCurrentlyPlaying ? "Pause" : "Play")
+    .accessibilityValue(
+      episodePlayButtonAccessibilityValue(for: episode, isCurrentlyPlaying: isCurrentlyPlaying)
+    )
   }
 
   private func episodePlayButtonText(
@@ -673,6 +709,27 @@ struct PodcastDetailsView: View {
     return text
   }
 
+  private func episodePlayButtonAccessibilityValue(
+    for episode: Model.Episode,
+    isCurrentlyPlaying: Bool
+  ) -> String {
+    if isCurrentlyPlaying {
+      return ""
+    }
+    if episode.isCompleted {
+      return String(localized: "Played")
+    }
+    guard let duration = episode.duration, duration > 0 else {
+      return ""
+    }
+    if episode.progress > 0 {
+      return (duration * (1 - episode.progress)).accessibilityTimeRemaining
+    }
+    return Duration.seconds(duration).formatted(
+      .units(allowed: [.hours, .minutes], width: .wide)
+    )
+  }
+
 }
 
 // MARK: - Model
@@ -698,11 +755,44 @@ extension PodcastDetailsView {
     var episodeCount: Int
     var feedURL: String?
 
-    var episodes: [Episode]
-    var searchText: String
-    var selectedFilter: EpisodeFilter
-    var selectedSort: EpisodeSort
-    var ascending: Bool
+    var episodes: [Episode] {
+      didSet {
+        guard !isUpdatingEpisodeState else { return }
+        rebuildEpisodeIndex()
+        refreshFilteredEpisodes()
+      }
+    }
+    var searchText: String {
+      didSet {
+        guard searchText != oldValue else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    var selectedFilter: EpisodeFilter {
+      didSet {
+        guard selectedFilter != oldValue else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    var selectedSort: EpisodeSort {
+      didSet {
+        guard selectedSort != oldValue, !isUpdatingProjectionOptions else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    var ascending: Bool {
+      didSet {
+        guard ascending != oldValue, !isUpdatingProjectionOptions else { return }
+        refreshFilteredEpisodes()
+      }
+    }
+    private(set) var filteredEpisodes: [Episode] = []
+
+    @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
+    @ObservationIgnored private var filteredEpisodeIndexByID: [String: Int] = [:]
+    @ObservationIgnored private var observedDownloadStates: [String: DownloadManager.DownloadState] = [:]
+    @ObservationIgnored private var isUpdatingEpisodeState = false
+    @ObservationIgnored private var isUpdatingProjectionOptions = false
 
     var currentlyPlayingEpisodeID: String?
     var isPlaying: Bool
@@ -723,27 +813,8 @@ extension PodcastDetailsView {
       }
     }
 
-    var filteredEpisodes: [Episode] {
-      var result = episodes
-
-      if !searchText.isEmpty {
-        let query = searchText.lowercased()
-        result = result.filter {
-          $0.title.lowercased().contains(query)
-            || ($0.description?.lowercased().contains(query) ?? false)
-        }
-      }
-
-      switch selectedFilter {
-      case .all:
-        break
-      case .incomplete:
-        result = result.filter { !$0.isCompleted }
-      case .complete:
-        result = result.filter { $0.isCompleted }
-      case .inProgress:
-        result = result.filter { $0.progress > 0 && !$0.isCompleted }
-      }
+    private func projectedEpisodes() -> [Episode] {
+      var result = episodes.filter(matchesProjection)
 
       result.sort { selectedSort.areInOrder($0, $1, ascending: ascending) }
 
@@ -751,6 +822,7 @@ extension PodcastDetailsView {
     }
 
     func onAppear() {}
+    func onDisappear() {}
     func onPlayEpisode(_ episode: Episode) {}
     func onPlayAllEpisodes() {}
     func onDownloadAllEpisodes() {}
@@ -760,8 +832,107 @@ extension PodcastDetailsView {
       if selectedSort == sort {
         ascending.toggle()
       } else {
+        isUpdatingProjectionOptions = true
         selectedSort = sort
         ascending = false
+        isUpdatingProjectionOptions = false
+        refreshFilteredEpisodes()
+      }
+    }
+
+    @discardableResult
+    func applyDownloadStates(_ states: [String: DownloadManager.DownloadState]) -> Int {
+      let relevantStates = Dictionary(
+        uniqueKeysWithValues: episodeIndexByID.keys.map {
+          ($0, states[$0] ?? .notDownloaded)
+        }
+      )
+      let changedIDs = Set(observedDownloadStates.keys).union(relevantStates.keys).filter {
+        observedDownloadStates[$0] != relevantStates[$0]
+      }
+      observedDownloadStates = relevantStates
+
+      var updatedEpisodes = episodes
+      var updatedFilteredEpisodes = filteredEpisodes
+      var changedKnownEpisodeCount = 0
+
+      for id in changedIDs {
+        guard let episodeIndex = episodeIndexByID[id] else { continue }
+        let state = relevantStates[id] ?? .notDownloaded
+        guard updatedEpisodes[episodeIndex].downloadState != state else { continue }
+
+        updatedEpisodes[episodeIndex].downloadState = state
+        if let filteredIndex = filteredEpisodeIndexByID[id] {
+          updatedFilteredEpisodes[filteredIndex].downloadState = state
+        }
+        changedKnownEpisodeCount += 1
+      }
+
+      guard changedKnownEpisodeCount > 0 else { return 0 }
+
+      isUpdatingEpisodeState = true
+      episodes = updatedEpisodes
+      isUpdatingEpisodeState = false
+      filteredEpisodes = updatedFilteredEpisodes
+      return changedKnownEpisodeCount
+    }
+
+    @discardableResult
+    func applyProgress(_ progress: Double, to episodeID: String) -> Bool {
+      guard let episodeIndex = episodeIndexByID[episodeID] else { return false }
+      let isCompleted = progress >= 1.0
+      guard
+        episodes[episodeIndex].progress != progress
+          || episodes[episodeIndex].isCompleted != isCompleted
+      else { return false }
+
+      let wasProjected = filteredEpisodeIndexByID[episodeID] != nil
+      var updatedEpisode = episodes[episodeIndex]
+      updatedEpisode.progress = progress
+      updatedEpisode.isCompleted = isCompleted
+
+      isUpdatingEpisodeState = true
+      episodes[episodeIndex] = updatedEpisode
+      isUpdatingEpisodeState = false
+
+      let isProjected = matchesProjection(updatedEpisode)
+      if wasProjected != isProjected {
+        refreshFilteredEpisodes()
+      } else if isProjected, let filteredIndex = filteredEpisodeIndexByID[episodeID] {
+        filteredEpisodes[filteredIndex] = updatedEpisode
+      }
+      return true
+    }
+
+    private func rebuildEpisodeIndex() {
+      episodeIndexByID = Dictionary(uniqueKeysWithValues: episodes.indices.map { (episodes[$0].id, $0) })
+    }
+
+    private func refreshFilteredEpisodes() {
+      filteredEpisodes = projectedEpisodes()
+      filteredEpisodeIndexByID = Dictionary(
+        uniqueKeysWithValues: filteredEpisodes.indices.map { (filteredEpisodes[$0].id, $0) }
+      )
+    }
+
+    private func matchesProjection(_ episode: Episode) -> Bool {
+      if !searchText.isEmpty {
+        let query = searchText.lowercased()
+        guard
+          episode.title.lowercased().contains(query)
+            || (episode.description?.lowercased().contains(query) ?? false)
+        else { return false }
+      }
+
+      switch selectedFilter {
+      case .all:
+        return true
+      case .incomplete:
+        return !episode.isCompleted
+      case .complete:
+        return episode.isCompleted
+      case .inProgress:
+        return episode.progress > 0 && !episode.isCompleted
       }
     }
 
@@ -809,6 +980,8 @@ extension PodcastDetailsView {
       self.ascending = ascending
       self.currentlyPlayingEpisodeID = currentlyPlayingEpisodeID
       self.isPlaying = isPlaying
+      rebuildEpisodeIndex()
+      refreshFilteredEpisodes()
     }
   }
 }
@@ -825,6 +998,7 @@ extension PodcastDetailsView.Model {
     let duration: Double?
     let size: Int64?
     let description: String?
+    var summary: String? = nil
     var isCompleted: Bool
     var progress: Double
     let chapters: [Chapter]
@@ -875,7 +1049,7 @@ extension PodcastDetailsView.Model {
   enum EpisodeFilter: String, CaseIterable {
     case all, incomplete, complete, inProgress
 
-    var title: String {
+    var title: LocalizedStringResource {
       switch self {
       case .all: "All"
       case .incomplete: "Incomplete"
@@ -888,7 +1062,7 @@ extension PodcastDetailsView.Model {
   enum EpisodeSort: String, CaseIterable {
     case pubDate, title, season, episode
 
-    var title: String {
+    var title: LocalizedStringResource {
       switch self {
       case .pubDate: "Pub Date"
       case .title: "Title"

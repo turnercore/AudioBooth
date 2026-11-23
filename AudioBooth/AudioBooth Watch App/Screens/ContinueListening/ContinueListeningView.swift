@@ -6,7 +6,9 @@ struct ContinueListeningView: View {
 
   var body: some View {
     Group {
-      if model.continueListeningRows.isEmpty && model.availableOfflineRows.isEmpty && model.homeSections.isEmpty {
+      if model.continueListeningRows.isEmpty && model.downloadingRows.isEmpty && model.availableOfflineRows.isEmpty
+        && model.homeSections.isEmpty
+      {
         ProgressView()
       } else {
         content
@@ -16,11 +18,21 @@ struct ContinueListeningView: View {
     .navigationDestination(for: WatchHomeSection.self) { section in
       SectionDetailView(model: SectionDetailViewModel(section: section))
     }
+    .navigationDestination(for: WatchPodcast.self) { podcast in
+      SectionDetailView(model: PodcastEpisodesViewModel(podcast: podcast))
+    }
   }
 
   private var content: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
+        if !model.downloadingRows.isEmpty {
+          sectionHeader("Downloading")
+          ForEach(model.downloadingRows) { rowModel in
+            ContinueListeningRow(model: rowModel)
+          }
+        }
+
         if !model.continueListeningRows.isEmpty {
           sectionHeader("Continue Listening")
           ForEach(model.continueListeningRows) { rowModel in
@@ -34,6 +46,15 @@ struct ContinueListeningView: View {
             ContinueListeningRow(model: rowModel)
           }
         }
+
+        NavigationLink {
+          PhoneDownloadsView()
+        } label: {
+          Label("Downloads on iPhone", systemImage: "iphone.and.arrow.forward")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .padding(.horizontal)
 
         if !model.homeSections.isEmpty {
           sectionHeader("More")
@@ -50,7 +71,7 @@ struct ContinueListeningView: View {
               }
               .padding()
               .background(Color(red: 0.1, green: 0.1, blue: 0.2))
-              .clipShape(RoundedRectangle(cornerRadius: 16))
+              .clipShape(.rect(cornerRadius: 16))
               .overlay(
                 RoundedRectangle(cornerRadius: 16)
                   .stroke(Color(red: 0.2, green: 0.2, blue: 0.4), lineWidth: 1)
@@ -81,7 +102,7 @@ struct ContinueListeningView: View {
     }
   }
 
-  private func sectionHeader(_ title: String) -> some View {
+  private func sectionHeader(_ title: LocalizedStringKey) -> some View {
     Text(title)
       .font(.caption)
       .fontWeight(.semibold)
@@ -96,6 +117,7 @@ extension ContinueListeningView {
   @Observable
   class Model: ObservableObject {
     var continueListeningRows: [ContinueListeningRow.Model]
+    var downloadingRows: [ContinueListeningRow.Model]
     var availableOfflineRows: [ContinueListeningRow.Model]
     var homeSections: [WatchHomeSection]
     var isRefreshing: Bool = false
@@ -104,10 +126,12 @@ extension ContinueListeningView {
 
     init(
       continueListeningRows: [ContinueListeningRow.Model] = [],
+      downloadingRows: [ContinueListeningRow.Model] = [],
       availableOfflineRows: [ContinueListeningRow.Model] = [],
       homeSections: [WatchHomeSection] = []
     ) {
       self.continueListeningRows = continueListeningRows
+      self.downloadingRows = downloadingRows
       self.availableOfflineRows = availableOfflineRows
       self.homeSections = homeSections
     }
