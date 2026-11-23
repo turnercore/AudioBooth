@@ -1187,10 +1187,10 @@ extension DownloadManager {
   }
 
   func deleteDownload(for bookID: String) {
-    guard !WatchFileTransferCoordinator.shared.activeBookIDs.contains(bookID) else {
-      AppLogger.download.warning("Keeping iPhone download while its Watch transfer is active")
-      Toast(error: "Cancel the Watch transfer before deleting this download").show()
-      return
+    // Refusing here left stuck persisted jobs blocking every automatic cleanup with no way out.
+    if WatchFileTransferCoordinator.shared.activeBookIDs.contains(bookID) {
+      AppLogger.download.warning("Cancelling Watch transfer before deleting iPhone download")
+      WatchConnectivityManager.shared.cancelWatchTransfers(for: bookID)
     }
 
     guard let serverID = Audiobookshelf.shared.authentication.server?.id else {
